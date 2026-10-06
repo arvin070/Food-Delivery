@@ -34,6 +34,18 @@ export const authorizeDeliveryPartner = () =>
   authorize(UserRole.DELIVERY_PARTNER, UserRole.SUPER_ADMIN);
 
 /**
+ * Roles that may manage children and order on someone else's behalf.
+ *
+ * PARENT is the obvious one; CUSTOMER is included because the role a person
+ * picks at sign-up does not always match what they end up doing — someone who
+ * registered as a customer and later adds a child should not have to create a
+ * second account. SUPER_ADMIN is deliberately absent: these endpoints are
+ * scoped to the caller's own children, so an admin would only ever see an empty
+ * list. Administrative oversight belongs under /admin.
+ */
+export const authorizeGuardian = () => authorize(UserRole.PARENT, UserRole.CUSTOMER);
+
+/**
  * Ownership check for `/me`-style resources.
  *
  * Returns true when the principal owns the record, or is an admin acting on

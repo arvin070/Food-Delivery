@@ -28,21 +28,37 @@ export interface PlannedSection {
 export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   CUSTOMER: [
     { href: '/meals', label: 'Browse meals' },
+    { href: '/children', label: 'My children' },
     { href: '/orders', label: 'My orders' },
+    { href: '/profile', label: 'Profile' },
   ],
   STUDENT: [
     { href: '/meals', label: 'Browse meals' },
     { href: '/orders', label: 'My orders' },
+    { href: '/profile', label: 'Profile' },
   ],
   PARENT: [
     { href: '/meals', label: 'Browse meals' },
     { href: '/children', label: 'My children' },
     { href: '/orders', label: 'My orders' },
+    { href: '/profile', label: 'Profile' },
   ],
-  VENDOR: [{ href: '/vendor', label: 'Kitchen' }],
-  DELIVERY_PARTNER: [{ href: '/delivery', label: 'Deliveries' }],
-  INSTITUTION_ADMIN: [{ href: '/institution', label: 'Overview' }],
-  SUPER_ADMIN: [{ href: '/admin', label: 'Admin' }],
+  VENDOR: [
+    { href: '/vendor', label: 'Kitchen' },
+    { href: '/profile', label: 'Profile' },
+  ],
+  DELIVERY_PARTNER: [
+    { href: '/delivery', label: 'Deliveries' },
+    { href: '/profile', label: 'Profile' },
+  ],
+  INSTITUTION_ADMIN: [
+    { href: '/institution', label: 'Overview' },
+    { href: '/profile', label: 'Profile' },
+  ],
+  SUPER_ADMIN: [
+    { href: '/admin', label: 'Admin' },
+    { href: '/profile', label: 'Profile' },
+  ],
 };
 
 export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
@@ -58,7 +74,6 @@ export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
     { label: 'Order tracking', description: 'Live status from preparing through to delivered.' },
   ],
   PARENT: [
-    { label: 'Child management', description: 'Each child, their institution, checkpoint and allergies.' },
     { label: 'Ordering for a child', description: 'Place an order on a child’s behalf, to their usual checkpoint.' },
     { label: 'Delivery confirmation', description: 'Notification the moment a meal is handed over.' },
     { label: 'Subscriptions', description: 'Recurring weekday meals per child.' },

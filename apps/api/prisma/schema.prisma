@@ -251,15 +251,27 @@ model UserProfile {
   avatarUrl          String?
   dietaryPreference  DietaryPreference @default(NONE)
   allergies          String?
-  /// Pre-selected checkpoint, so repeat ordering is one tap.
+  /// Softer than `dietaryPreference`: cuisines and tastes used for filtering
+  /// and, later, recommendations. Free-form tags rather than an enum, because
+  /// this list grows with the menu.
+  foodPreferences    String[]          @default([])
+
+  /// Pre-selected checkpoint and slot, so repeat ordering is one tap.
   defaultCheckpointId String?
-  cityId             String?
+  defaultTimeSlotId   String?
+  cityId              String?
+
+  /// Who to contact if something goes wrong with a delivery.
+  emergencyContactName     String?
+  emergencyContactPhone    String?
+  emergencyContactRelation String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   defaultCheckpoint Checkpoint? @relation(fields: [defaultCheckpointId], references: [id], onDelete: SetNull)
+  defaultTimeSlot   TimeSlot?   @relation(fields: [defaultTimeSlotId], references: [id], onDelete: SetNull)
   city              City?       @relation(fields: [cityId], references: [id], onDelete: SetNull)
 
   @@map("user_profiles")
@@ -278,11 +290,24 @@ model Child {
   section       String?
   rollNumber    String?
 
+  /// Where and when this child's meals usually go. Pre-fills the order form;
+  /// the parent can still override per order.
   defaultCheckpointId String?
+  defaultTimeSlotId   String?
+
   dietaryPreference   DietaryPreference @default(NONE)
   allergies           String?
+  foodPreferences     String[]          @default([])
   notes               String?
 
+  /// Contact for this child specifically — often a second parent or a guardian
+  /// the school can reach, which may differ from the account holder.
+  emergencyContactName     String?
+  emergencyContactPhone    String?
+  emergencyContactRelation String?
+
+  /// Set only if the child is later given their own STUDENT login. A child
+  /// never needs an account to receive meals.
   studentUserId String? @unique
   isActive      Boolean @default(true)
 
@@ -294,6 +319,7 @@ model Child {
   studentUser       User?          @relation("StudentChild", fields: [studentUserId], references: [id], onDelete: SetNull)
   institution       Institution?   @relation(fields: [institutionId], references: [id], onDelete: SetNull)
   defaultCheckpoint Checkpoint?    @relation(fields: [defaultCheckpointId], references: [id], onDelete: SetNull)
+  defaultTimeSlot   TimeSlot?      @relation(fields: [defaultTimeSlotId], references: [id], onDelete: SetNull)
   cartItems         CartItem[]
   orderItems        OrderItem[]
   subscriptions     Subscription[]
@@ -528,6 +554,8 @@ model TimeSlot {
   orderItems    OrderItem[]
   deliveryRuns  DeliveryRun[]
   subscriptions Subscription[]
+  defaultForProfiles UserProfile[]
+  defaultForChildren Child[]
 
   @@index([cityId, isActive, sortOrder])
   @@map("time_slots")
