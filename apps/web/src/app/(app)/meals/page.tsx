@@ -1,26 +1,110 @@
 import type { Metadata } from 'next';
-import { ModuleShell } from '@/components/ModuleShell';
-import { plannedSectionsFor } from '@/lib/navigation';
+import type { CatalogFacets, CatalogMeal } from '@lunch/shared';
+import { apiServer } from '@/lib/api.server';
 import { requireUser } from '@/lib/session';
+import { CatalogFilters } from '@/components/catalog/CatalogFilters';
+import { MealCard } from '@/components/catalog/MealCard';
+import { SearchBox } from '@/components/catalog/SearchBox';
+import { EmptyState } from '@/components/ui/States';
 
 export const metadata: Metadata = { title: 'Browse meals' };
 
-/**
- * The customer landing surface, open to every buyer role.
- *
- * Meal browsing, the date/checkpoint/slot pickers and the cart arrive with the
- * catalog module.
- */
-export default async function MealsPage() {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+/** Rebuilds the API query from the page's own URL, preserving repeats. */
+function toApiQuery(params: SearchParams): string {
+  const query = new URLSearchParams();
+  const passthrough = [
+    'serviceDate',
+    'checkpointId',
+    'mealPeriod',
+    'timeSlotId',
+    'foodType',
+    'categoryId',
+    'search',
+    'minPrice',
+    'maxPrice',
+    'sort',
+    'page',
+  ];
+
+  for (const key of passthrough) {
+    const value = params[key];
+    if (typeof value === 'string' && value) query.set(key, value);
+  }
+
+  // Allergen exclusions repeat, so they cannot go through the loop above.
+  const excluded = params['excludeAllergens'];
+  if (typeof excluded === 'string') query.append('excludeAllergens', excluded);
+  else if (Array.isArray(excluded)) for (const a of excluded) query.append('excludeAllergens', a);
+
+  query.set('pageSize', '24');
+  return query.toString();
+}
+
+export default async function MealsPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
   const user = await requireUser('/meals');
+  const params = await searchParams;
+  const checkpointId = typeof params['checkpointId'] === 'string' ? params['checkpointId'] : undefined;
+
+  const [catalog, { dates }, { checkpoints }] = await Promise.all([
+    apiServer.getWithMeta<CatalogMeal[], { facets: CatalogFacets; total: number }>(
+      `/catalog/meals?${toApiQuery(params)}`
+    ),
+    apiServer.get<{ dates: string[] }>(
+      `/catalog/dates${checkpointId ? `?checkpointId=${checkpointId}` : ''}`
+    ),
+    apiServer.get<{ checkpoints: { id: string; name: string }[] }>('/reference/checkpoints'),
+  ]);
+
+  const meals = catalog.data;
   const firstName = user.fullName.split(' ')[0] ?? user.fullName;
 
   return (
-    <ModuleShell
-      title={`Welcome, ${firstName}`}
-      subtitle="Pick a meal, a date, a checkpoint and a delivery slot."
-      moduleName="catalog module"
-      sections={plannedSectionsFor(user.role)}
-    />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+          Browse meals, {firstName}
+        </h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Pick a date and a checkpoint — we only show what can reach you there.
+        </p>
+      </div>
+
+      <SearchBox />
+
+      <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
+        <aside>
+          <CatalogFilters
+            facets={catalog.meta.facets}
+            dates={dates}
+            checkpoints={checkpoints}
+          />
+        </aside>
+
+        <section>
+          <p className="mb-3 text-sm text-slate-500">
+            {catalog.meta.total} {catalog.meta.total === 1 ? 'meal' : 'meals'} available
+          </p>
+
+          {meals.length === 0 ? (
+            <EmptyState
+              title="Nothing matches those filters"
+              description="Try another date or checkpoint, or clear a filter — kitchens publish different dishes on different days."
+            />
+          ) : (
+            <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {meals.map((meal) => (
+                <MealCard key={meal.mealScheduleId} meal={meal} checkpointId={checkpointId} />
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }

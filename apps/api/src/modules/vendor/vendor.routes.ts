@@ -13,6 +13,10 @@ import { Router } from 'express';
 import {
   bulkUpdateOrderItemStatusSchema,
   createMealSchema,
+  listAvailabilityQuerySchema,
+  publishAvailabilitySchema,
+  scheduleIdParamSchema,
+  updateAvailabilitySchema,
   kitchenIdParamSchema,
   listMealsQuerySchema,
   listVendorOrdersQuerySchema,
@@ -27,6 +31,7 @@ import { asyncHandler, created, noContent, ok, paginated } from '../../core/http
 import { authenticate } from '../../middleware/authenticate';
 import { authorizeVendor } from '../../middleware/authorize';
 import { validateBody, validateParams, validateQuery } from '../../middleware/validate';
+import * as availabilityService from './availability.service';
 import * as dashboardService from './dashboard.service';
 import * as kitchenService from './kitchen.service';
 import * as mealService from './meal.service';
@@ -230,5 +235,58 @@ vendorRouter.post(
     assertVendorCanTrade(context);
     const result = await orderService.bulkUpdateOrderItemStatus(context.vendorId, req.body);
     return ok(res, result);
+  })
+);
+
+// ─── Availability (publishing meals for dates) ───────────────────────────────
+
+vendorRouter.get(
+  '/availability',
+  validateQuery(listAvailabilityQuerySchema),
+  asyncHandler(async (req, res) => {
+    const context = await resolveVendorContext(req);
+    const result = await availabilityService.listAvailability(context.vendorId, req.query as never);
+    return paginated(res, result);
+  })
+);
+
+vendorRouter.post(
+  '/availability',
+  validateBody(publishAvailabilitySchema),
+  asyncHandler(async (req, res) => {
+    const context = await resolveVendorContext(req);
+    assertVendorCanTrade(context);
+    const result = await availabilityService.publishAvailability(context.vendorId, req.body);
+    return created(res, result);
+  })
+);
+
+vendorRouter.patch(
+  '/availability/:scheduleId',
+  validateParams(scheduleIdParamSchema),
+  validateBody(updateAvailabilitySchema),
+  asyncHandler(async (req, res) => {
+    const context = await resolveVendorContext(req);
+    assertVendorCanTrade(context);
+    const availability = await availabilityService.updateAvailability(
+      context.vendorId,
+      req.params['scheduleId'] as string,
+      req.body
+    );
+    return ok(res, { availability });
+  })
+);
+
+vendorRouter.delete(
+  '/availability/:scheduleId',
+  validateParams(scheduleIdParamSchema),
+  asyncHandler(async (req, res) => {
+    const context = await resolveVendorContext(req);
+    assertVendorCanTrade(context);
+    await availabilityService.withdrawAvailability(
+      context.vendorId,
+      req.params['scheduleId'] as string
+    );
+    return noContent(res);
   })
 );

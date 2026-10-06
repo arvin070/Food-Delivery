@@ -201,7 +201,7 @@ describe('admin: vendor lifecycle', () => {
     expect(res.body.data.vendor.approvedAt).not.toBeNull();
   });
 
-  it('suspending a vendor deactivates its kitchens and pulls its inventory', async () => {
+  it('suspending a vendor deactivates its kitchens and hides its inventory', async () => {
     const { vendorId } = await provisionVendor('Suspendable Co');
     const kitchen = await prisma.kitchen.create({
       data: { vendorId, name: 'Suspendable Kitchen', cityId },
@@ -234,8 +234,38 @@ describe('admin: vendor lifecycle', () => {
     const kitchenRow = await prisma.kitchen.findUniqueOrThrow({ where: { id: kitchen.id } });
     expect(kitchenRow.isActive).toBe(false);
 
+    // The schedule is left alone — the catalog hides it via the vendor filter,
+    // so restoring the vendor restores their inventory intact.
     const scheduleRow = await prisma.mealSchedule.findUniqueOrThrow({ where: { id: schedule.id } });
-    expect(scheduleRow.status).toBe('CLOSED');
+    expect(scheduleRow.status).toBe('PUBLISHED');
+
+    const customerToken = (
+      await api()
+        .post('/api/v1/auth/login')
+        .send({ identifier: 'customer@lunch.test', password: SEED_PASSWORD })
+        .expect(200)
+    ).body.data.tokens.accessToken as string;
+
+    const browse = await api()
+      .get(`/api/v1/catalog/meals?serviceDate=${future.toISOString().slice(0, 10)}&pageSize=100`)
+      .set('Authorization', `Bearer ${customerToken}`)
+      .expect(200);
+    expect(
+      browse.body.data.some((m: { mealId: string }) => m.mealId === meal.id)
+    ).toBe(false);
+
+    // Restoring brings it straight back.
+    await api()
+      .patch(`/api/v1/admin/vendors/${vendorId}/status`)
+      .set('Authorization', adminAuth())
+      .send({ status: VendorStatus.APPROVED })
+      .expect(200);
+
+    const after = await api()
+      .get(`/api/v1/catalog/meals?serviceDate=${future.toISOString().slice(0, 10)}&pageSize=100`)
+      .set('Authorization', `Bearer ${customerToken}`)
+      .expect(200);
+    expect(after.body.data.some((m: { mealId: string }) => m.mealId === meal.id)).toBe(true);
   });
 
   it('records status changes in the audit log', async () => {

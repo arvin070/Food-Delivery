@@ -253,21 +253,86 @@ async function main() {
   const [southIndian, northIndian, tiffinBox, snacks] = categories;
 
   const mealSpecs = [
-    { slug: 'south-indian-veg-thali', name: 'South Indian Veg Thali', description: 'Rice, sambar, two poriyals, rasam, curd, appalam and a sweet.', basePrice: '129.00', foodType: 'VEG' as const, categoryId: southIndian!.id, calories: 680, cuisine: 'South Indian', tags: ['thali', 'rice', 'veg'], components: [['Steamed rice', '1 cup'], ['Sambar', '150 ml'], ['Poriyal', '2 varieties'], ['Curd', '100 ml'], ['Sweet', '1 piece']] },
-    { slug: 'chapati-paneer-tiffin', name: 'Chapati & Paneer Tiffin', description: 'Four chapatis with paneer butter masala and salad.', basePrice: '159.00', foodType: 'VEG' as const, categoryId: northIndian!.id, calories: 720, cuisine: 'North Indian', tags: ['chapati', 'paneer'], components: [['Chapati', '4 nos'], ['Paneer butter masala', '200 ml'], ['Salad', '1 portion']] },
-    { slug: 'school-kids-tiffin', name: 'School Kids Tiffin Box', description: 'Mini idlis, chutney, a fruit portion and a milk-based sweet. No nuts.', basePrice: '99.00', foodType: 'VEG' as const, categoryId: tiffinBox!.id, calories: 480, cuisine: 'South Indian', tags: ['kids', 'nut-free', 'tiffin'], components: [['Mini idli', '8 nos'], ['Chutney', '60 ml'], ['Fruit portion', '1 cup'], ['Sweet', '1 piece']] },
-    { slug: 'chicken-biryani-box', name: 'Chicken Biryani Box', description: 'Seeraga samba biryani with raita and boiled egg.', basePrice: '199.00', foodType: 'NON_VEG' as const, categoryId: southIndian!.id, calories: 860, cuisine: 'South Indian', tags: ['biryani', 'chicken'], components: [['Chicken biryani', '350 g'], ['Raita', '80 ml'], ['Boiled egg', '1 no']] },
-    { slug: 'vegan-millet-bowl', name: 'Vegan Millet Bowl', description: 'Little-millet khichdi with sautéed vegetables and peanut-free chutney.', basePrice: '149.00', foodType: 'VEGAN' as const, categoryId: tiffinBox!.id, calories: 520, cuisine: 'Healthy', tags: ['vegan', 'millet', 'healthy'], components: [['Millet khichdi', '1 bowl'], ['Sautéed vegetables', '150 g'], ['Chutney', '50 ml']] },
-    { slug: 'evening-snack-combo', name: 'Evening Snack Combo', description: 'Two medu vadas, one sweet and filter coffee.', basePrice: '79.00', foodType: 'VEG' as const, categoryId: snacks!.id, calories: 390, cuisine: 'South Indian', tags: ['snack', 'coffee'], components: [['Medu vada', '2 nos'], ['Sweet', '1 piece'], ['Filter coffee', '150 ml']] },
+    {
+      slug: 'south-indian-veg-thali', name: 'South Indian Veg Thali',
+      description: 'Rice, sambar, two poriyals, rasam, curd, appalam and a sweet.',
+      basePrice: '129.00', foodType: 'VEG' as const, categoryId: southIndian!.id,
+      calories: 680, proteinG: '18.50', carbsG: '98.00', fatG: '19.20', fibreG: '8.40',
+      cuisine: 'South Indian', tags: ['thali', 'rice', 'veg'],
+      mealPeriods: ['LUNCH', 'DINNER'] as const,
+      ingredients: ['rice', 'toor dal', 'tamarind', 'curry leaves', 'coconut', 'curd', 'jaggery'],
+      allergens: ['MILK'] as const, prepTimeMinutes: 45, maxDailyQuantity: 120,
+      components: [['Steamed rice', '1 cup'], ['Sambar', '150 ml'], ['Poriyal', '2 varieties'], ['Curd', '100 ml'], ['Sweet', '1 piece']],
+    },
+    {
+      slug: 'chapati-paneer-tiffin', name: 'Chapati & Paneer Tiffin',
+      description: 'Four chapatis with paneer butter masala and salad.',
+      basePrice: '159.00', foodType: 'VEG' as const, categoryId: northIndian!.id,
+      calories: 720, proteinG: '26.00', carbsG: '82.00', fatG: '28.50', fibreG: '9.10',
+      cuisine: 'North Indian', tags: ['chapati', 'paneer'],
+      mealPeriods: ['LUNCH', 'DINNER'] as const,
+      ingredients: ['wheat flour', 'paneer', 'tomato', 'butter', 'cream', 'cashew'],
+      allergens: ['MILK', 'WHEAT_GLUTEN', 'TREE_NUTS'] as const, prepTimeMinutes: 40, maxDailyQuantity: 100,
+      components: [['Chapati', '4 nos'], ['Paneer butter masala', '200 ml'], ['Salad', '1 portion']],
+    },
+    {
+      slug: 'school-kids-tiffin', name: 'School Kids Tiffin Box',
+      description: 'Mini idlis, chutney, a fruit portion and a milk-based sweet. Made in a nut-free batch.',
+      basePrice: '99.00', foodType: 'VEG' as const, categoryId: tiffinBox!.id,
+      calories: 480, proteinG: '12.00', carbsG: '76.00', fatG: '11.00', fibreG: '5.20',
+      cuisine: 'South Indian', tags: ['kids', 'nut-free', 'tiffin'],
+      mealPeriods: ['BREAKFAST', 'LUNCH'] as const,
+      ingredients: ['idli rice', 'urad dal', 'coconut', 'banana', 'milk', 'sugar'],
+      allergens: ['MILK'] as const, prepTimeMinutes: 35, maxDailyQuantity: 200,
+      components: [['Mini idli', '8 nos'], ['Chutney', '60 ml'], ['Fruit portion', '1 cup'], ['Sweet', '1 piece']],
+    },
+    {
+      slug: 'chicken-biryani-box', name: 'Chicken Biryani Box',
+      description: 'Seeraga samba biryani with raita and boiled egg.',
+      basePrice: '199.00', foodType: 'NON_VEG' as const, categoryId: southIndian!.id,
+      calories: 860, proteinG: '42.00', carbsG: '96.00', fatG: '31.00', fibreG: '4.80',
+      cuisine: 'South Indian', tags: ['biryani', 'chicken'],
+      mealPeriods: ['LUNCH', 'DINNER'] as const,
+      ingredients: ['seeraga samba rice', 'chicken', 'yoghurt', 'mint', 'egg', 'ghee'],
+      allergens: ['MILK', 'EGGS'] as const, prepTimeMinutes: 60, maxDailyQuantity: 80,
+      components: [['Chicken biryani', '350 g'], ['Raita', '80 ml'], ['Boiled egg', '1 no']],
+    },
+    {
+      slug: 'vegan-millet-bowl', name: 'Vegan Millet Bowl',
+      description: 'Little-millet khichdi with sautéed vegetables and a peanut-free chutney.',
+      basePrice: '149.00', foodType: 'VEGAN' as const, categoryId: tiffinBox!.id,
+      calories: 520, proteinG: '15.00', carbsG: '84.00', fatG: '12.50', fibreG: '11.00',
+      cuisine: 'Healthy', tags: ['vegan', 'millet', 'healthy'],
+      mealPeriods: ['LUNCH', 'DINNER'] as const,
+      ingredients: ['little millet', 'moong dal', 'carrot', 'beans', 'coconut oil'],
+      allergens: [] as const, prepTimeMinutes: 40, maxDailyQuantity: 90,
+      components: [['Millet khichdi', '1 bowl'], ['Sautéed vegetables', '150 g'], ['Chutney', '50 ml']],
+    },
+    {
+      slug: 'evening-snack-combo', name: 'Evening Snack Combo',
+      description: 'Two medu vadas, one sweet and filter coffee.',
+      basePrice: '79.00', foodType: 'VEG' as const, categoryId: snacks!.id,
+      calories: 390, proteinG: '9.00', carbsG: '52.00', fatG: '15.00', fibreG: '3.60',
+      cuisine: 'South Indian', tags: ['snack', 'coffee'],
+      mealPeriods: ['SNACKS'] as const,
+      ingredients: ['urad dal', 'coffee', 'milk', 'sugar', 'ghee'],
+      allergens: ['MILK'] as const, prepTimeMinutes: 25, maxDailyQuantity: 150,
+      components: [['Medu vada', '2 nos'], ['Sweet', '1 piece'], ['Filter coffee', '150 ml']],
+    },
   ];
 
   const meals = [];
   for (const spec of mealSpecs) {
-    const { components, ...mealData } = spec;
+    const { components, mealPeriods, allergens, ...mealData } = spec;
+    const writable = {
+      ...mealData,
+      mealPeriods: [...mealPeriods],
+      allergens: [...allergens],
+    };
     const meal = await prisma.meal.upsert({
       where: { vendorId_slug: { vendorId: vendor.id, slug: spec.slug } },
-      update: { ...mealData, isActive: true },
-      create: { ...mealData, vendorId: vendor.id, kitchenId: kitchen.id },
+      update: { ...writable, isActive: true },
+      create: { ...writable, vendorId: vendor.id, kitchenId: kitchen.id },
     });
     await prisma.mealComponent.deleteMany({ where: { mealId: meal.id } });
     await prisma.mealComponent.createMany({

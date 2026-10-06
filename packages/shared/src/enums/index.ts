@@ -79,6 +79,58 @@ export const FoodType = {
 } as const;
 export type FoodType = (typeof FoodType)[keyof typeof FoodType];
 
+/**
+ * The major allergens. Kept as a fixed list rather than free text because this
+ * is safety-critical on a platform that feeds children — see the Prisma enum
+ * for the full reasoning.
+ */
+export const Allergen = {
+  MILK: 'MILK',
+  EGGS: 'EGGS',
+  FISH: 'FISH',
+  SHELLFISH: 'SHELLFISH',
+  TREE_NUTS: 'TREE_NUTS',
+  PEANUTS: 'PEANUTS',
+  WHEAT_GLUTEN: 'WHEAT_GLUTEN',
+  SOY: 'SOY',
+  SESAME: 'SESAME',
+  MUSTARD: 'MUSTARD',
+  CELERY: 'CELERY',
+  SULPHITES: 'SULPHITES',
+} as const;
+export type Allergen = (typeof Allergen)[keyof typeof Allergen];
+
+/** Human labels for the allergen list. */
+export const ALLERGEN_LABELS: Record<Allergen, string> = {
+  MILK: 'Milk',
+  EGGS: 'Eggs',
+  FISH: 'Fish',
+  SHELLFISH: 'Shellfish',
+  TREE_NUTS: 'Tree nuts',
+  PEANUTS: 'Peanuts',
+  WHEAT_GLUTEN: 'Wheat / gluten',
+  SOY: 'Soy',
+  SESAME: 'Sesame',
+  MUSTARD: 'Mustard',
+  CELERY: 'Celery',
+  SULPHITES: 'Sulphites',
+};
+
+export const MEAL_PERIOD_LABELS: Record<string, string> = {
+  BREAKFAST: 'Breakfast',
+  LUNCH: 'Lunch',
+  SNACKS: 'Snack',
+  DINNER: 'Dinner',
+};
+
+export const FOOD_TYPE_LABELS: Record<string, string> = {
+  VEG: 'Vegetarian',
+  NON_VEG: 'Non-vegetarian',
+  EGG: 'Contains egg',
+  VEGAN: 'Vegan',
+  JAIN: 'Jain',
+};
+
 export const VendorStatus = {
   PENDING_APPROVAL: 'PENDING_APPROVAL',
   APPROVED: 'APPROVED',

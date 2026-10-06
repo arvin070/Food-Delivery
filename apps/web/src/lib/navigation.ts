@@ -47,6 +47,7 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: '/vendor', label: 'Dashboard' },
     { href: '/vendor/orders', label: 'Orders' },
     { href: '/vendor/menu', label: 'Menu' },
+    { href: '/vendor/availability', label: 'Availability' },
     { href: '/vendor/kitchen', label: 'Kitchen' },
     { href: '/profile', label: 'Profile' },
   ],
@@ -67,13 +68,11 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
 
 export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
   CUSTOMER: [
-    { label: 'Meal catalog', description: 'Browse published meals for a chosen date and checkpoint.' },
     { label: 'Cart and checkout', description: 'Review the basket, confirm slots and pay.' },
     { label: 'Order tracking', description: 'Live status from preparing through to delivered.' },
     { label: 'Subscriptions', description: 'Standing orders for recurring weekday meals.' },
   ],
   STUDENT: [
-    { label: 'Meal catalog', description: 'Browse published meals for a chosen date and checkpoint.' },
     { label: 'Cart and checkout', description: 'Review the basket, confirm slots and pay.' },
     { label: 'Order tracking', description: 'Live status from preparing through to delivered.' },
   ],
@@ -83,7 +82,6 @@ export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
     { label: 'Subscriptions', description: 'Recurring weekday meals per child.' },
   ],
   VENDOR: [
-    { label: 'Publishing', description: 'Which meals are available on which dates and time slots.' },
     { label: 'Dispatch handover', description: 'Hand packed meals to a delivery partner.' },
   ],
   DELIVERY_PARTNER: [

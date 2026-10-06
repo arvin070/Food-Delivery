@@ -97,6 +97,27 @@ enum FoodType {
   JAIN
 }
 
+/// The major allergens, as an enum rather than free text.
+///
+/// This is safety-critical data on a platform that feeds children: free text
+/// invites "penuts" or "nuts (traces)" — spellings a filter will miss, hiding a
+/// hazard from the one parent who needed to see it. A fixed list can be matched
+/// exactly, translated, and shown with a consistent icon.
+enum Allergen {
+  MILK
+  EGGS
+  FISH
+  SHELLFISH
+  TREE_NUTS
+  PEANUTS
+  WHEAT_GLUTEN
+  SOY
+  SESAME
+  MUSTARD
+  CELERY
+  SULPHITES
+}
+
 enum VendorStatus {
   PENDING_APPROVAL
   APPROVED
@@ -735,10 +756,31 @@ model Meal {
   basePrice   Decimal  @db.Decimal(10, 2)
   foodType    FoodType @default(VEG)
   cuisine     String?
-  calories    Int?
+
+  /// Which parts of the day this dish suits. An array because a thali is sold
+  /// at both lunch and dinner; publishing validates the slot against this.
+  mealPeriods MealPeriod[] @default([])
+
+  /// What the dish is made of, for display and search. Distinct from
+  /// `MealComponent`, which is what physically goes in the box.
+  ingredients String[]  @default([])
+  /// Declared allergens. Empty means "none declared", not "none present" —
+  /// the UI words it that way deliberately.
+  allergens   Allergen[] @default([])
+
+  /// Nutrition per serving. Null means not declared.
+  calories  Int?
+  proteinG  Decimal? @db.Decimal(6, 2)
+  carbsG    Decimal? @db.Decimal(6, 2)
+  fatG      Decimal? @db.Decimal(6, 2)
+  fibreG    Decimal? @db.Decimal(6, 2)
+
   /// Free-form labels for search and, later, recommendations.
   tags            String[] @default([])
   prepTimeMinutes Int      @default(45)
+  /// Default ceiling when publishing this dish for a date. Null means the
+  /// kitchen's own capacity is the only limit.
+  maxDailyQuantity Int?
   isActive        Boolean  @default(true)
 
   createdAt DateTime  @default(now())
@@ -755,6 +797,7 @@ model Meal {
 
   @@unique([vendorId, slug])
   @@index([isActive, foodType])
+  @@index([isActive, mealPeriods])
   @@index([categoryId, isActive])
   @@map("meals")
 }

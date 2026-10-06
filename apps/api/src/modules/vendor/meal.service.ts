@@ -4,9 +4,11 @@
  */
 import type { Prisma } from '@prisma/client';
 import type {
+  Allergen,
   CreateMealInput,
   FoodType,
   ListMealsQuery,
+  MealPeriod,
   PaginatedResult,
   UpdateMealInput,
   VendorMeal,
@@ -25,10 +27,18 @@ const mealSelect = {
   imageUrl: true,
   basePrice: true,
   foodType: true,
+  mealPeriods: true,
   cuisine: true,
+  ingredients: true,
+  allergens: true,
   calories: true,
+  proteinG: true,
+  carbsG: true,
+  fatG: true,
+  fibreG: true,
   tags: true,
   prepTimeMinutes: true,
+  maxDailyQuantity: true,
   isActive: true,
   category: { select: { id: true, name: true } },
   kitchen: { select: { id: true, name: true } },
@@ -46,10 +56,19 @@ function toVendorMeal(row: MealRow, scheduledCount: number): VendorMeal {
     imageUrl: row.imageUrl,
     basePrice: toMoney(row.basePrice),
     foodType: row.foodType as FoodType,
+    mealPeriods: row.mealPeriods as MealPeriod[],
     cuisine: row.cuisine,
+    ingredients: row.ingredients,
+    allergens: row.allergens as Allergen[],
     calories: row.calories,
+    // Nutrition is Decimal in the database; null means "not declared".
+    proteinG: row.proteinG === null ? null : toMoney(row.proteinG),
+    carbsG: row.carbsG === null ? null : toMoney(row.carbsG),
+    fatG: row.fatG === null ? null : toMoney(row.fatG),
+    fibreG: row.fibreG === null ? null : toMoney(row.fibreG),
     tags: row.tags,
     prepTimeMinutes: row.prepTimeMinutes,
+    maxDailyQuantity: row.maxDailyQuantity,
     isActive: row.isActive,
     category: row.category,
     kitchen: row.kitchen,
@@ -109,6 +128,8 @@ export async function listMeals(
     vendorId,
     deletedAt: null,
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+    ...(query.mealPeriod ? { mealPeriods: { has: query.mealPeriod } } : {}),
+    ...(query.foodType ? { foodType: query.foodType } : {}),
     ...(query.search
       ? {
           OR: [
@@ -165,12 +186,20 @@ export async function createMeal(vendorId: string, input: CreateMealInput): Prom
       imageUrl: input.imageUrl ?? null,
       basePrice: input.basePrice,
       foodType: input.foodType,
+      mealPeriods: input.mealPeriods ?? [],
       categoryId: input.categoryId ?? null,
       kitchenId: input.kitchenId ?? null,
       cuisine: input.cuisine ?? null,
+      ingredients: input.ingredients ?? [],
+      allergens: input.allergens ?? [],
       calories: input.calories ?? null,
+      proteinG: input.proteinG ?? null,
+      carbsG: input.carbsG ?? null,
+      fatG: input.fatG ?? null,
+      fibreG: input.fibreG ?? null,
       tags: input.tags ?? [],
       prepTimeMinutes: input.prepTimeMinutes,
+      maxDailyQuantity: input.maxDailyQuantity ?? null,
       isActive: input.isActive,
       ...(input.components && input.components.length > 0
         ? {
@@ -219,10 +248,18 @@ export async function updateMeal(
   if (input.imageUrl !== undefined) data.imageUrl = input.imageUrl;
   if (input.basePrice !== undefined) data.basePrice = input.basePrice;
   if (input.foodType !== undefined) data.foodType = input.foodType;
+  if (input.mealPeriods !== undefined) data.mealPeriods = input.mealPeriods;
   if (input.cuisine !== undefined) data.cuisine = input.cuisine;
+  if (input.ingredients !== undefined) data.ingredients = input.ingredients;
+  if (input.allergens !== undefined) data.allergens = input.allergens;
   if (input.calories !== undefined) data.calories = input.calories;
+  if (input.proteinG !== undefined) data.proteinG = input.proteinG;
+  if (input.carbsG !== undefined) data.carbsG = input.carbsG;
+  if (input.fatG !== undefined) data.fatG = input.fatG;
+  if (input.fibreG !== undefined) data.fibreG = input.fibreG;
   if (input.tags !== undefined) data.tags = input.tags;
   if (input.prepTimeMinutes !== undefined) data.prepTimeMinutes = input.prepTimeMinutes;
+  if (input.maxDailyQuantity !== undefined) data.maxDailyQuantity = input.maxDailyQuantity;
   if (input.isActive !== undefined) data.isActive = input.isActive;
   if (input.categoryId !== undefined) {
     data.category = input.categoryId ? { connect: { id: input.categoryId } } : { disconnect: true };

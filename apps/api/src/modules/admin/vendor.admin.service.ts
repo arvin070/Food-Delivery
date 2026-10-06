@@ -187,9 +187,15 @@ export async function createVendor(
 /**
  * Approves, rejects, suspends or restores a vendor.
  *
- * Suspension deactivates the vendor and its kitchens in the same transaction:
- * leaving kitchens active would let a suspended business keep taking orders
- * through the catalog.
+ * Suspension deactivates the vendor and its kitchens in the same transaction.
+ *
+ * It deliberately does **not** touch published availability. The catalog
+ * already filters on `vendor.status === APPROVED && isActive`, so a suspended
+ * vendor's meals are invisible either way — and closing the schedules would be
+ * irreversible, because nothing records whether a CLOSED date was closed by the
+ * suspension or by the vendor themselves. A one-day suspension would silently
+ * destroy a month of forward inventory. Restoring a vendor now restores exactly
+ * what they had.
  */
 export async function updateVendorStatus(
   actorUserId: string,
@@ -224,18 +230,6 @@ export async function updateVendorStatus(
       where: { vendorId, deletedAt: null },
       data: { isActive: isLive },
     });
-
-    if (!isLive) {
-      // Pull unsold inventory so the catalog stops offering it.
-      await tx.mealSchedule.updateMany({
-        where: {
-          kitchen: { vendorId },
-          status: 'PUBLISHED',
-          serviceDate: { gte: new Date(new Date().toDateString()) },
-        },
-        data: { status: 'CLOSED' },
-      });
-    }
 
     await tx.auditLog.create({
       data: {

@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { adminRouter } from './modules/admin/admin.routes';
 import { authRouter } from './modules/auth/auth.routes';
+import { catalogRouter } from './modules/catalog/catalog.routes';
 import { childRouter } from './modules/children/child.routes';
 import { deliveryRouter } from './modules/delivery/delivery.routes';
 import { healthRouter } from './modules/health/health.routes';
@@ -24,6 +25,9 @@ apiRouter.use('/profile', profileRouter);
 apiRouter.use('/children', childRouter);
 apiRouter.use('/reference', referenceRouter);
 
+// Read-only customer catalog. Registers no write verbs at all.
+apiRouter.use('/catalog', catalogRouter);
+
 // Role-guarded surfaces. Each router applies its own authorize() internally, so
 // mounting one here cannot accidentally expose it.
 apiRouter.use('/admin', adminRouter);
@@ -31,7 +35,6 @@ apiRouter.use('/vendor', vendorRouter);
 apiRouter.use('/delivery', deliveryRouter);
 
 // Mounted as the modules land:
-//   apiRouter.use('/catalog', catalogRouter);
 //   apiRouter.use('/cart', cartRouter);
 //   apiRouter.use('/orders', ordersRouter);
 //   apiRouter.use('/payments', paymentsRouter);

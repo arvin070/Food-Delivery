@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FoodType, OrderItemStatus, VendorStatus } from '../enums/index.js';
+import { Allergen, FoodType, MealPeriod, OrderItemStatus, VendorStatus } from '../enums/index.js';
 import {
   dateOnlySchema,
   emailSchema,
@@ -174,18 +174,42 @@ export const mealComponentSchema = z.object({
   quantity: z.string().trim().max(40).nullish(),
 });
 
+const gramsSchema = z.coerce.number().min(0).max(1000).nullish();
+
 export const createMealSchema = z.object({
   name: nameSchema,
   description: z.string().trim().max(1000).nullish(),
   imageUrl: z.string().url().max(2048).nullish(),
   basePrice: priceSchema,
   foodType: z.enum(Object.values(FoodType) as [FoodType, ...FoodType[]]).default(FoodType.VEG),
+  /** Which parts of the day this dish suits. Checked against the slot on publish. */
+  mealPeriods: z
+    .array(z.enum(Object.values(MealPeriod) as [MealPeriod, ...MealPeriod[]]))
+    .max(4)
+    .optional(),
   categoryId: idSchema.nullish(),
   kitchenId: idSchema.nullish(),
   cuisine: z.string().trim().max(60).nullish(),
+
+  /** What the dish is made of. */
+  ingredients: z.array(z.string().trim().min(1).max(80)).max(60).optional(),
+  /** Declared allergens, from the fixed list. */
+  allergens: z
+    .array(z.enum(Object.values(Allergen) as [Allergen, ...Allergen[]]))
+    .max(12)
+    .optional(),
+
+  /** Nutrition per serving. Null means not declared. */
   calories: z.coerce.number().int().min(0).max(5000).nullish(),
+  proteinG: gramsSchema,
+  carbsG: gramsSchema,
+  fatG: gramsSchema,
+  fibreG: gramsSchema,
+
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
   prepTimeMinutes: z.coerce.number().int().min(1).max(600).default(45),
+  /** Default ceiling when publishing this dish for a date. */
+  maxDailyQuantity: z.coerce.number().int().min(1).max(10_000).nullish(),
   isActive: z.boolean().default(true),
   /** What is inside the tiffin. Display only. */
   components: z.array(mealComponentSchema).max(30).optional(),
@@ -199,6 +223,8 @@ export const mealIdParamSchema = z.object({ mealId: idSchema });
 
 export const listMealsQuerySchema = paginationSchema.extend({
   search: z.string().trim().min(1).max(120).optional(),
+  mealPeriod: z.enum(Object.values(MealPeriod) as [MealPeriod, ...MealPeriod[]]).optional(),
+  foodType: z.enum(Object.values(FoodType) as [FoodType, ...FoodType[]]).optional(),
   isActive: z
     .enum(['true', 'false'])
     .transform((v) => v === 'true')
@@ -214,10 +240,18 @@ export interface VendorMeal {
   imageUrl: string | null;
   basePrice: string;
   foodType: FoodType;
+  mealPeriods: MealPeriod[];
   cuisine: string | null;
+  ingredients: string[];
+  allergens: Allergen[];
   calories: number | null;
+  proteinG: string | null;
+  carbsG: string | null;
+  fatG: string | null;
+  fibreG: string | null;
   tags: string[];
   prepTimeMinutes: number;
+  maxDailyQuantity: number | null;
   isActive: boolean;
   category: { id: string; name: string } | null;
   kitchen: { id: string; name: string } | null;
