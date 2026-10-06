@@ -638,7 +638,8 @@ model Kitchen {
   city          City                 @relation(fields: [cityId], references: [id], onDelete: Restrict)
   zone          Zone?                @relation(fields: [zoneId], references: [id], onDelete: SetNull)
   address       Address?             @relation(fields: [addressId], references: [id], onDelete: SetNull)
-  serviceAreas  KitchenServiceArea[]
+  serviceAreas   KitchenServiceArea[]
+  operatingHours KitchenOperatingHour[]
   meals         Meal[]
   mealSchedules MealSchedule[]
   orderItems    OrderItem[]
@@ -648,6 +649,32 @@ model Kitchen {
   @@index([vendorId, isActive])
   @@index([cityId, isActive])
   @@map("kitchens")
+}
+
+/// When a kitchen is open, one row per weekday it operates.
+///
+/// Times are minutes from midnight in the city's timezone, matching TimeSlot —
+/// so "can this kitchen cover the 12:30 lunch slot?" is an integer comparison
+/// rather than date arithmetic. A missing row means closed that day, which is
+/// why `isClosed` exists too: it lets a vendor keep the hours they normally
+/// work while marking the day shut.
+model KitchenOperatingHour {
+  id        String @id @default(cuid())
+  kitchenId String
+
+  /// ISO weekday: 1 = Monday … 7 = Sunday.
+  dayOfWeek    Int
+  opensMinute  Int     @default(360)
+  closesMinute Int     @default(1320)
+  isClosed     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kitchen Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+
+  @@unique([kitchenId, dayOfWeek])
+  @@map("kitchen_operating_hours")
 }
 
 /// Which checkpoints a kitchen serves, and how long before the slot it must

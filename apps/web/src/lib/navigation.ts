@@ -44,7 +44,10 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: '/profile', label: 'Profile' },
   ],
   VENDOR: [
-    { href: '/vendor', label: 'Kitchen' },
+    { href: '/vendor', label: 'Dashboard' },
+    { href: '/vendor/orders', label: 'Orders' },
+    { href: '/vendor/menu', label: 'Menu' },
+    { href: '/vendor/kitchen', label: 'Kitchen' },
     { href: '/profile', label: 'Profile' },
   ],
   DELIVERY_PARTNER: [
@@ -56,7 +59,8 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
     { href: '/profile', label: 'Profile' },
   ],
   SUPER_ADMIN: [
-    { href: '/admin', label: 'Admin' },
+    { href: '/admin', label: 'Dashboard' },
+    { href: '/admin/vendors', label: 'Vendors' },
     { href: '/profile', label: 'Profile' },
   ],
 };
@@ -79,10 +83,8 @@ export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
     { label: 'Subscriptions', description: 'Recurring weekday meals per child.' },
   ],
   VENDOR: [
-    { label: 'Menu management', description: 'Meals you offer, their components and pricing.' },
     { label: 'Publishing', description: 'Which meals are available on which dates and time slots.' },
-    { label: 'Production queue', description: 'What to cook, grouped by slot and checkpoint.' },
-    { label: 'Preparation and packing', description: 'Move each item through preparing, packed and dispatched.' },
+    { label: 'Dispatch handover', description: 'Hand packed meals to a delivery partner.' },
   ],
   DELIVERY_PARTNER: [
     { label: 'Assigned runs', description: 'Today’s runs, each with its kitchen and time slot.' },
@@ -96,7 +98,6 @@ export const PLANNED_SECTIONS: Record<UserRole, PlannedSection[]> = {
   ],
   SUPER_ADMIN: [
     { label: 'Users', description: 'Customers, parents, students and their account status.' },
-    { label: 'Vendors and kitchens', description: 'Approvals, kitchens, service areas and commission.' },
     { label: 'Delivery partners', description: 'Riders, availability and assignment.' },
     { label: 'Orders and payments', description: 'Every order and payment across the platform.' },
     { label: 'Checkpoints and time slots', description: 'Delivery points, capacity and ordering cutoffs.' },

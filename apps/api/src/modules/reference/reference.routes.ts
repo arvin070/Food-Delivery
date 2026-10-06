@@ -75,6 +75,18 @@ referenceRouter.get(
 );
 
 referenceRouter.get(
+  '/meal-categories',
+  asyncHandler(async (_req, res) => {
+    const categories = await prisma.mealCategory.findMany({
+      where: { isActive: true },
+      select: { id: true, name: true, slug: true },
+      orderBy: { sortOrder: 'asc' },
+    });
+    return ok(res, { categories });
+  })
+);
+
+referenceRouter.get(
   '/time-slots',
   validateQuery(cityFilterSchema),
   asyncHandler(async (req, res) => {

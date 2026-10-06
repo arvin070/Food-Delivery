@@ -49,6 +49,20 @@ export function toSkipTake({ page, pageSize }: Pagination): { skip: number; take
   return { skip: (page - 1) * pageSize, take: pageSize };
 }
 
+/**
+ * Serialises a Prisma `Decimal` as the two-place decimal string the API's money
+ * contract promises.
+ *
+ * `Decimal.toString()` drops trailing zeros — 139.00 becomes "139" and 125.50
+ * becomes "125.5" — which breaks clients that parse a fixed shape and looks
+ * wrong on a receipt. Every money field crossing the wire goes through here.
+ */
+export function toMoney(value: { toString(): string } | null | undefined): string {
+  if (value == null) return '0.00';
+  const parsed = Number.parseFloat(value.toString());
+  return (Number.isFinite(parsed) ? parsed : 0).toFixed(2);
+}
+
 /** Best-effort client IP, honouring one proxy hop. */
 export function clientIp(req: Request): string | undefined {
   return req.ip ?? req.socket.remoteAddress ?? undefined;

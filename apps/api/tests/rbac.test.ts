@@ -317,7 +317,8 @@ describe('role-scoped resources', () => {
       .expect(200);
 
     expect(res.body.data.vendor.businessName).toBeTypeOf('string');
-    expect(Array.isArray(res.body.data.vendor.kitchens)).toBe(true);
+    // Kitchens are returned alongside the vendor, not nested inside it.
+    expect(Array.isArray(res.body.data.kitchens)).toBe(true);
   });
 
   it('returns the delivery partner’s own profile', async () => {

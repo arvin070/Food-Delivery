@@ -320,6 +320,89 @@ async function main() {
     }
   }
 
+  // ── Operating hours: Mon–Sat 06:00–22:00, Sunday closed ──────────────────
+  for (let day = 1; day <= 7; day += 1) {
+    await prisma.kitchenOperatingHour.upsert({
+      where: { kitchenId_dayOfWeek: { kitchenId: kitchen.id, dayOfWeek: day } },
+      update: {},
+      create: {
+        kitchenId: kitchen.id,
+        dayOfWeek: day,
+        opensMinute: 360,
+        closesMinute: 1320,
+        isClosed: day === 7,
+      },
+    });
+  }
+
+  // ── Sample orders, so the vendor dashboard has something to show ─────────
+  // Spread across today and the next two days, in a mix of statuses.
+  const buyers = [customer, parent, student];
+  const orderStatuses = ['PENDING', 'CONFIRMED', 'PREPARING', 'PACKED', 'DELIVERED'] as const;
+
+  const existingOrders = await prisma.order.count({ where: { orderNumber: { startsWith: 'LN-SEED' } } });
+  if (existingOrders === 0) {
+    let seq = 0;
+    for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
+      const date = serviceDate(dayOffset);
+      const schedules = await prisma.mealSchedule.findMany({
+        where: { serviceDate: date, status: 'PUBLISHED' },
+        include: { meal: true },
+        take: 4,
+      });
+
+      for (const schedule of schedules) {
+        const buyer = buyers[seq % buyers.length]!;
+        const checkpoint = checkpoints[seq % checkpoints.length]!;
+        // Today gets a spread of statuses; future dates stay CONFIRMED.
+        const status = dayOffset === 0 ? orderStatuses[seq % orderStatuses.length]! : 'CONFIRMED';
+        const quantity = (seq % 3) + 1;
+        const unitPrice = schedule.price.toString();
+        const lineTotal = (Number(unitPrice) * quantity).toFixed(2);
+
+        const order = await prisma.order.create({
+          data: {
+            orderNumber: `LN-SEED${String(seq).padStart(4, '0')}`,
+            customerId: buyer.id,
+            cityId: city.id,
+            status: 'CONFIRMED',
+            subtotal: lineTotal,
+            totalAmount: lineTotal,
+            placedAt: new Date(),
+          },
+        });
+
+        await prisma.orderItem.create({
+          data: {
+            orderId: order.id,
+            mealScheduleId: schedule.id,
+            mealId: schedule.mealId,
+            kitchenId: schedule.kitchenId,
+            checkpointId: checkpoint.id,
+            timeSlotId: schedule.timeSlotId,
+            serviceDate: date,
+            beneficiaryName: buyer.fullName,
+            mealNameSnapshot: schedule.meal.name,
+            unitPrice,
+            quantity,
+            lineTotal,
+            status,
+            ...(status === 'PREPARING' ? { preparingAt: new Date() } : {}),
+            ...(status === 'PACKED' ? { packedAt: new Date() } : {}),
+          },
+        });
+
+        await prisma.mealSchedule.update({
+          where: { id: schedule.id },
+          data: { reservedQuantity: { increment: quantity } },
+        });
+
+        seq += 1;
+      }
+    }
+    console.log(`  Seeded ${seq} sample orders across 3 days.`);
+  }
+
   console.log(`
 Seed complete.
 
