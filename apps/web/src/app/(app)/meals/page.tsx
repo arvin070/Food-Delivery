@@ -1,39 +1,26 @@
 import type { Metadata } from 'next';
+import { ModuleShell } from '@/components/ModuleShell';
+import { plannedSectionsFor } from '@/lib/navigation';
 import { requireUser } from '@/lib/session';
-import { Alert } from '@/components/ui/Alert';
-import { EmptyState } from '@/components/ui/States';
 
 export const metadata: Metadata = { title: 'Browse meals' };
 
 /**
- * Placeholder for the catalog module.
+ * The customer landing surface, open to every buyer role.
  *
- * It renders the real signed-in shell and confirms the session round-trip
- * works; the meal browsing, date and slot pickers land in the catalog module.
+ * Meal browsing, the date/checkpoint/slot pickers and the cart arrive with the
+ * catalog module.
  */
 export default async function MealsPage() {
   const user = await requireUser('/meals');
+  const firstName = user.fullName.split(' ')[0] ?? user.fullName;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-          Welcome, {user.fullName.split(' ')[0]}
-        </h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Pick a meal, a date, a checkpoint and a delivery slot.
-        </p>
-      </div>
-
-      <Alert tone="info" title="Foundation is live">
-        Authentication, the database and the API layer are working. Meal browsing arrives with the
-        catalog module.
-      </Alert>
-
-      <EmptyState
-        title="No meals to show yet"
-        description="The catalog module will list published meals for the date and checkpoint you choose."
-      />
-    </div>
+    <ModuleShell
+      title={`Welcome, ${firstName}`}
+      subtitle="Pick a meal, a date, a checkpoint and a delivery slot."
+      moduleName="catalog module"
+      sections={plannedSectionsFor(user.role)}
+    />
   );
 }
