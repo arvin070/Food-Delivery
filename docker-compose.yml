@@ -1,0 +1,22 @@
+# Optional: for developers who have Docker. Otherwise use `npm run db:start`.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lunch-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lunch
+      POSTGRES_PASSWORD: lunch
+      POSTGRES_DB: lunch
+    ports:
+      - "55432:5432"
+    volumes:
+      - lunch-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lunch -d lunch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  lunch-pgdata:

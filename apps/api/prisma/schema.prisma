@@ -1,0 +1,1194 @@
+// ─────────────────────────────────────────────────────────────────────────────
+//  Lunch — scheduled meal/tiffin delivery platform
+//
+//  Data model shape:
+//    Customer → Meal → Date → TimeSlot → Checkpoint → Kitchen → Route → Customer
+//
+//  Design notes that keep later features from forcing a restructure:
+//
+//  * City/Zone exist from day one, so multi-city is a data change, not a
+//    migration of every table.
+//  * Fulfilment state lives on OrderItem, not Order. One order may span several
+//    dates, checkpoints and beneficiaries; the kitchen and the rider act on a
+//    single meal-for-one-person-on-one-date. Order.status is a roll-up.
+//  * MealSchedule is the sellable unit: a meal, from a kitchen, on a date, in a
+//    time slot, with a quantity. All browsing, capacity and demand-prediction
+//    work hangs off this one table.
+//  * Institution + InstitutionMember generalise college/school/corporate
+//    accounts, so B2B billing later needs no new identity concept.
+//  * Payment is provider-agnostic (provider + providerRefs + rawPayload), so
+//    adding Razorpay/Stripe does not change the orders schema.
+//  * DeliveryRun/DeliveryStop already model an ordered route, so route
+//    optimisation becomes a service that reorders stops — not a new table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+// Kept in lockstep with packages/shared/src/enums/index.ts
+
+enum UserRole {
+  CUSTOMER
+  PARENT
+  STUDENT
+  VENDOR
+  DELIVERY_PARTNER
+  INSTITUTION_ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum DietaryPreference {
+  NONE
+  VEGETARIAN
+  VEGAN
+  EGGETARIAN
+  JAIN
+}
+
+enum InstitutionType {
+  SCHOOL
+  COLLEGE
+  CORPORATE
+  COMMUNITY
+  OTHER
+}
+
+enum InstitutionMemberRole {
+  ADMIN
+  MEMBER
+}
+
+enum CheckpointType {
+  COLLEGE_GATE
+  SCHOOL_GATE
+  BUS_CHECKPOINT
+  OFFICE_RECEPTION
+  HOSTEL
+  APARTMENT
+  OTHER
+}
+
+enum MealPeriod {
+  BREAKFAST
+  LUNCH
+  SNACKS
+  DINNER
+}
+
+enum FoodType {
+  VEG
+  NON_VEG
+  EGG
+  VEGAN
+  JAIN
+}
+
+enum VendorStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum MealScheduleStatus {
+  DRAFT
+  PUBLISHED
+  SOLD_OUT
+  CLOSED
+  CANCELLED
+}
+
+enum OrderStatus {
+  DRAFT
+  AWAITING_PAYMENT
+  CONFIRMED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  CANCELLED
+  PAYMENT_FAILED
+  REFUNDED
+}
+
+enum OrderItemStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  PACKED
+  DISPATCHED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  FAILED
+}
+
+enum DeliveryRunStatus {
+  PLANNED
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum DeliveryStopStatus {
+  PENDING
+  ARRIVED
+  COMPLETED
+  SKIPPED
+}
+
+enum DeliveryStatus {
+  PENDING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  RETURNED
+}
+
+enum PaymentProviderName {
+  MOCK
+  RAZORPAY
+  CASH
+  WALLET
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  AUTHORIZED
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum OtpPurpose {
+  PHONE_VERIFICATION
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  LOGIN
+}
+
+// ─── Identity & access ───────────────────────────────────────────────────────
+
+model User {
+  id           String     @id @default(cuid())
+  fullName     String
+  /// Either email or phone must be present — enforced in the service layer,
+  /// since a DB CHECK across two nullable uniques is not expressible in Prisma.
+  email        String?    @unique
+  phone        String?    @unique
+  passwordHash String
+  role         UserRole   @default(CUSTOMER)
+  status       UserStatus @default(ACTIVE)
+
+  emailVerifiedAt DateTime?
+  phoneVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  profile             UserProfile?
+  vendor              Vendor?
+  deliveryPartner     DeliveryPartner?
+  children            Child[]              @relation("ParentChildren")
+  childRecord         Child?               @relation("StudentChild")
+  institutionMembers  InstitutionMember[]
+  carts               Cart[]
+  orders              Order[]
+  subscriptions       Subscription[]
+  refreshTokens       RefreshToken[]
+  otpVerifications    OtpVerification[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]           @relation("AuditActor")
+  wallet              Wallet?
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  dateOfBirth        DateTime?
+  avatarUrl          String?
+  dietaryPreference  DietaryPreference @default(NONE)
+  allergies          String?
+  /// Pre-selected checkpoint, so repeat ordering is one tap.
+  defaultCheckpointId String?
+  cityId             String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultCheckpoint Checkpoint? @relation(fields: [defaultCheckpointId], references: [id], onDelete: SetNull)
+  city              City?       @relation(fields: [cityId], references: [id], onDelete: SetNull)
+
+  @@map("user_profiles")
+}
+
+/// A child a PARENT orders for. `studentUserId` lets the same child later be
+/// given their own STUDENT login without duplicating the record.
+model Child {
+  id       String @id @default(cuid())
+  parentId String
+
+  fullName      String
+  dateOfBirth   DateTime?
+  institutionId String?
+  grade         String?
+  section       String?
+  rollNumber    String?
+
+  defaultCheckpointId String?
+  dietaryPreference   DietaryPreference @default(NONE)
+  allergies           String?
+  notes               String?
+
+  studentUserId String? @unique
+  isActive      Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  parent            User           @relation("ParentChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  studentUser       User?          @relation("StudentChild", fields: [studentUserId], references: [id], onDelete: SetNull)
+  institution       Institution?   @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  defaultCheckpoint Checkpoint?    @relation(fields: [defaultCheckpointId], references: [id], onDelete: SetNull)
+  cartItems         CartItem[]
+  orderItems        OrderItem[]
+  subscriptions     Subscription[]
+
+  @@index([parentId, isActive])
+  @@index([institutionId])
+  @@map("children")
+}
+
+/// Rotating refresh tokens. Only the hash is stored, so a DB leak cannot be
+/// replayed as a session.
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  /// Set when this token was rotated, pointing at its successor — lets us
+  /// detect and kill a whole token family if an old token is replayed.
+  replacedById String?
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model OtpVerification {
+  id         String     @id @default(cuid())
+  userId     String?
+  /// Email or phone the code was sent to.
+  identifier String
+  purpose    OtpPurpose
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int        @default(0)
+  createdAt  DateTime   @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([identifier, purpose, consumedAt])
+  @@index([expiresAt])
+  @@map("otp_verifications")
+}
+
+// ─── Geography ───────────────────────────────────────────────────────────────
+
+model City {
+  id       String  @id @default(cuid())
+  name     String
+  state    String
+  country  String  @default("IN")
+  /// IANA zone. Every date/slot calculation is done in the city's local time.
+  timezone String  @default("Asia/Kolkata")
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  zones        Zone[]
+  checkpoints  Checkpoint[]
+  kitchens     Kitchen[]
+  institutions Institution[]
+  timeSlots    TimeSlot[]
+  orders       Order[]
+  profiles     UserProfile[]
+
+  @@unique([name, state])
+  @@index([isActive])
+  @@map("cities")
+}
+
+/// A delivery zone inside a city. Groups checkpoints for routing and for
+/// kitchen coverage.
+model Zone {
+  id       String  @id @default(cuid())
+  cityId   String
+  name     String
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city        City         @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  checkpoints Checkpoint[]
+  kitchens    Kitchen[]
+
+  @@unique([cityId, name])
+  @@map("zones")
+}
+
+model Address {
+  id         String  @id @default(cuid())
+  line1      String
+  line2      String?
+  landmark   String?
+  area       String?
+  cityName   String
+  state      String
+  postalCode String
+  country    String  @default("IN")
+  latitude   Float?
+  longitude  Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checkpoints  Checkpoint[]
+  kitchens     Kitchen[]
+  institutions Institution[]
+
+  @@map("addresses")
+}
+
+// ─── Institutions (college / school / corporate accounts) ────────────────────
+
+model Institution {
+  id        String          @id @default(cuid())
+  name      String
+  type      InstitutionType
+  cityId    String
+  addressId String?
+
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  /// Set when the institution is billed centrally rather than per-student.
+  isBilledCentrally Boolean @default(false)
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city        City                @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  address     Address?            @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  members     InstitutionMember[]
+  checkpoints Checkpoint[]
+  children    Child[]
+
+  @@index([cityId, type, isActive])
+  @@map("institutions")
+}
+
+model InstitutionMember {
+  id            String                @id @default(cuid())
+  institutionId String
+  userId        String
+  role          InstitutionMemberRole @default(MEMBER)
+  /// Roll number / employee ID at the institution.
+  identifier    String?
+  isActive      Boolean               @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([institutionId, userId])
+  @@index([userId, isActive])
+  @@map("institution_members")
+}
+
+// ─── Checkpoints & time slots ────────────────────────────────────────────────
+
+model Checkpoint {
+  id            String         @id @default(cuid())
+  name          String
+  type          CheckpointType
+  cityId        String
+  zoneId        String?
+  institutionId String?
+  addressId     String?
+
+  latitude  Float?
+  longitude  Float?
+  /// Metres. Used to validate a rider's position at proof-of-delivery.
+  geofenceRadiusM Int    @default(150)
+  /// Free-text guidance for riders ("left of the main gate, near the kiosk").
+  instructions    String?
+  isActive        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city            City                 @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  zone            Zone?                @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  institution     Institution?         @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  address         Address?             @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  timeSlots       CheckpointTimeSlot[]
+  servingKitchens KitchenServiceArea[]
+  cartItems       CartItem[]
+  orderItems      OrderItem[]
+  deliveryStops   DeliveryStop[]
+  subscriptions   Subscription[]
+  defaultForUsers UserProfile[]
+  defaultForChildren Child[]
+
+  @@index([cityId, isActive])
+  @@index([institutionId])
+  @@map("checkpoints")
+}
+
+/// A named delivery window, e.g. "Lunch 12:30–13:00".
+/// Times are minutes from midnight in the city's timezone, which makes
+/// comparison and cutoff maths trivial and timezone-safe.
+model TimeSlot {
+  id         String     @id @default(cuid())
+  cityId     String?
+  label      String
+  mealPeriod MealPeriod
+  startMinute Int
+  endMinute   Int
+  /// How long before `startMinute` ordering closes, in minutes. 1440 = the
+  /// previous day at the same time.
+  orderCutoffMinutes Int     @default(720)
+  sortOrder          Int     @default(0)
+  isActive           Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city          City?                @relation(fields: [cityId], references: [id], onDelete: Cascade)
+  checkpoints   CheckpointTimeSlot[]
+  mealSchedules MealSchedule[]
+  cartItems     CartItem[]
+  orderItems    OrderItem[]
+  deliveryRuns  DeliveryRun[]
+  subscriptions Subscription[]
+
+  @@index([cityId, isActive, sortOrder])
+  @@map("time_slots")
+}
+
+/// Which slots a checkpoint accepts, and how many meals can land there in that
+/// slot. Capacity is per checkpoint *and* per slot — a school gate can absorb
+/// far more at lunch than an office reception at breakfast.
+model CheckpointTimeSlot {
+  id           String @id @default(cuid())
+  checkpointId String
+  timeSlotId   String
+
+  /// Null means "no checkpoint-specific limit".
+  maxOrders Int?
+  /// Overrides TimeSlot.orderCutoffMinutes when set.
+  orderCutoffMinutes Int?
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checkpoint Checkpoint @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+  timeSlot   TimeSlot   @relation(fields: [timeSlotId], references: [id], onDelete: Cascade)
+
+  @@unique([checkpointId, timeSlotId])
+  @@map("checkpoint_time_slots")
+}
+
+// ─── Vendors & kitchens ──────────────────────────────────────────────────────
+
+model Vendor {
+  id          String       @id @default(cuid())
+  ownerUserId String       @unique
+  businessName String
+  legalName    String?
+  gstin        String?
+  contactEmail String?
+  contactPhone String?
+  status       VendorStatus @default(PENDING_APPROVAL)
+  /// Platform commission, percent. Stored per vendor so deals can differ.
+  commissionPct Decimal     @default(15.00) @db.Decimal(5, 2)
+  isActive      Boolean     @default(true)
+
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  deletedAt  DateTime?
+
+  ownerUser User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  kitchens  Kitchen[]
+  meals     Meal[]
+
+  @@index([status, isActive])
+  @@map("vendors")
+}
+
+/// A physical production unit. Multiple kitchens per vendor, and per city, are
+/// supported from the start.
+model Kitchen {
+  id        String  @id @default(cuid())
+  vendorId  String
+  name      String
+  cityId    String
+  zoneId    String?
+  addressId String?
+
+  latitude  Float?
+  longitude Float?
+  /// Hard ceiling on meals this kitchen can produce in one time slot.
+  capacityPerSlot Int     @default(100)
+  contactPhone    String?
+  isActive        Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  vendor        Vendor               @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  city          City                 @relation(fields: [cityId], references: [id], onDelete: Restrict)
+  zone          Zone?                @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  address       Address?             @relation(fields: [addressId], references: [id], onDelete: SetNull)
+  serviceAreas  KitchenServiceArea[]
+  meals         Meal[]
+  mealSchedules MealSchedule[]
+  orderItems    OrderItem[]
+  deliveryRuns  DeliveryRun[]
+  subscriptions Subscription[]
+
+  @@index([vendorId, isActive])
+  @@index([cityId, isActive])
+  @@map("kitchens")
+}
+
+/// Which checkpoints a kitchen serves, and how long before the slot it must
+/// start cooking. This is the join that makes "can this kitchen deliver here?"
+/// a single indexed lookup.
+model KitchenServiceArea {
+  id           String @id @default(cuid())
+  kitchenId    String
+  checkpointId String
+
+  /// Minutes before the slot starts that production must begin.
+  prepLeadMinutes Int     @default(90)
+  /// Minutes of travel from kitchen to checkpoint. Seeds the route plan.
+  travelMinutes   Int     @default(30)
+  isActive        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kitchen    Kitchen    @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  checkpoint Checkpoint @relation(fields: [checkpointId], references: [id], onDelete: Cascade)
+
+  @@unique([kitchenId, checkpointId])
+  @@index([checkpointId, isActive])
+  @@map("kitchen_service_areas")
+}
+
+// ─── Menu ────────────────────────────────────────────────────────────────────
+
+model MealCategory {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  slug      String  @unique
+  imageUrl  String?
+  sortOrder Int     @default(0)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meals Meal[]
+
+  @@map("meal_categories")
+}
+
+/// A menu item as the vendor defines it. It is not purchasable on its own —
+/// a MealSchedule makes it purchasable on a given date and slot.
+model Meal {
+  id         String  @id @default(cuid())
+  vendorId   String
+  kitchenId  String?
+  categoryId String?
+
+  name        String
+  slug        String
+  description String?
+  imageUrl    String?
+  basePrice   Decimal  @db.Decimal(10, 2)
+  foodType    FoodType @default(VEG)
+  cuisine     String?
+  calories    Int?
+  /// Free-form labels for search and, later, recommendations.
+  tags            String[] @default([])
+  prepTimeMinutes Int      @default(45)
+  isActive        Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  vendor    Vendor         @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  kitchen   Kitchen?       @relation(fields: [kitchenId], references: [id], onDelete: SetNull)
+  category  MealCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  items     MealComponent[]
+  schedules MealSchedule[]
+  orderItems OrderItem[]
+  subscriptions Subscription[]
+
+  @@unique([vendorId, slug])
+  @@index([isActive, foodType])
+  @@index([categoryId, isActive])
+  @@map("meals")
+}
+
+/// What is inside a tiffin — "2 chapati", "dal", "rice". Display only.
+model MealComponent {
+  id       String  @id @default(cuid())
+  mealId   String
+  name     String
+  quantity String?
+  sortOrder Int    @default(0)
+
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+
+  @@index([mealId, sortOrder])
+  @@map("meal_components")
+}
+
+/// THE sellable unit: this meal, from this kitchen, on this date, in this slot,
+/// at this price, with this much stock.
+///
+/// `reservedQuantity` counts meals committed to confirmed orders. Availability
+/// is `totalQuantity - reservedQuantity`, and it is incremented inside the same
+/// transaction that creates the order, guarded by the row lock, so two parents
+/// cannot take the last tiffin.
+model MealSchedule {
+  id         String   @id @default(cuid())
+  mealId     String
+  kitchenId  String
+  timeSlotId String
+  /// Date of *delivery*, midnight UTC, interpreted in the city's timezone.
+  serviceDate DateTime @db.Date
+
+  /// Overrides Meal.basePrice when set.
+  price            Decimal            @db.Decimal(10, 2)
+  totalQuantity    Int                @default(0)
+  reservedQuantity Int                @default(0)
+  status           MealScheduleStatus @default(DRAFT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  meal       Meal        @relation(fields: [mealId], references: [id], onDelete: Cascade)
+  kitchen    Kitchen     @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  timeSlot   TimeSlot    @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@unique([mealId, kitchenId, serviceDate, timeSlotId])
+  @@index([serviceDate, status])
+  @@index([kitchenId, serviceDate, timeSlotId])
+  @@map("meal_schedules")
+}
+
+// ─── Cart & orders ───────────────────────────────────────────────────────────
+
+model Cart {
+  id     String @id @default(cuid())
+  userId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  /// One open cart per user keeps "add to cart" idempotent and cheap.
+  @@unique([userId])
+  @@map("carts")
+}
+
+model CartItem {
+  id     String @id @default(cuid())
+  cartId String
+  /// Pins meal + kitchen + date + slot in one reference.
+  mealScheduleId String
+  /// Denormalised from the schedule so a cart row can be validated and
+  /// displayed without a join, and so we can detect schedule changes.
+  timeSlotId  String
+  serviceDate DateTime @db.Date
+
+  /// Carried per item, not per cart: a parent may send meals to two different
+  /// schools in one checkout.
+  checkpointId String
+  /// Null when the buyer is ordering for themselves.
+  childId      String?
+  quantity     Int     @default(1)
+  unitPrice    Decimal @db.Decimal(10, 2)
+  notes        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart         Cart         @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  mealSchedule MealSchedule @relation(fields: [mealScheduleId], references: [id], onDelete: Cascade)
+  timeSlot     TimeSlot     @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  checkpoint   Checkpoint   @relation(fields: [checkpointId], references: [id], onDelete: Restrict)
+  child        Child?       @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  /// The same meal, for the same person, at the same checkpoint is one line
+  /// with a quantity — not several rows.
+  @@unique([cartId, mealScheduleId, checkpointId, childId])
+  @@index([cartId])
+  @@map("cart_items")
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  /// Human-readable, shown to customers and riders. e.g. "LN-24A3F7K2".
+  orderNumber String      @unique
+  customerId  String
+  cityId      String?
+  status      OrderStatus @default(AWAITING_PAYMENT)
+
+  subtotal       Decimal @db.Decimal(10, 2)
+  deliveryFee    Decimal @default(0) @db.Decimal(10, 2)
+  taxAmount      Decimal @default(0) @db.Decimal(10, 2)
+  discountAmount Decimal @default(0) @db.Decimal(10, 2)
+  totalAmount    Decimal @db.Decimal(10, 2)
+  currency       String  @default("INR")
+
+  notes              String?
+  placedAt           DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customer User        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  city     City?       @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  items    OrderItem[]
+  payments Payment[]
+
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+/// One meal, for one beneficiary, on one date, at one checkpoint.
+///
+/// This is the unit of fulfilment. The kitchen marks *these* as preparing and
+/// packed; the rider delivers *these*. Meal name and price are snapshotted so
+/// an order's history never changes when a vendor edits their menu.
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String
+
+  mealScheduleId String?
+  mealId         String?
+  kitchenId      String
+  checkpointId   String
+  timeSlotId     String
+  serviceDate    DateTime @db.Date
+  subscriptionId String?
+
+  /// Null when the buyer ordered for themselves.
+  childId         String?
+  /// Snapshot of who the meal is for — survives a child record being deleted.
+  beneficiaryName String
+
+  mealNameSnapshot String
+  unitPrice        Decimal         @db.Decimal(10, 2)
+  quantity         Int             @default(1)
+  lineTotal        Decimal         @db.Decimal(10, 2)
+  status           OrderItemStatus @default(PENDING)
+  notes            String?
+
+  preparingAt DateTime?
+  packedAt    DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  mealSchedule MealSchedule? @relation(fields: [mealScheduleId], references: [id], onDelete: SetNull)
+  meal         Meal?         @relation(fields: [mealId], references: [id], onDelete: SetNull)
+  kitchen      Kitchen       @relation(fields: [kitchenId], references: [id], onDelete: Restrict)
+  checkpoint   Checkpoint    @relation(fields: [checkpointId], references: [id], onDelete: Restrict)
+  timeSlot     TimeSlot      @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  child        Child?        @relation(fields: [childId], references: [id], onDelete: SetNull)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  delivery     Delivery?
+
+  /// The kitchen's daily production queue.
+  @@index([kitchenId, serviceDate, timeSlotId, status])
+  /// What has to land at a checkpoint in a slot — the rider's manifest.
+  @@index([checkpointId, serviceDate, timeSlotId, status])
+  @@index([orderId])
+  @@index([childId, serviceDate])
+  @@map("order_items")
+}
+
+// ─── Delivery ────────────────────────────────────────────────────────────────
+
+model DeliveryPartner {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  /// Driving licence / ID reference, for compliance.
+  licenceNumber  String?
+  vehicleType    String?
+  vehicleNumber  String?
+  cityId         String?
+  isAvailable    Boolean @default(true)
+  isActive       Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveryRuns DeliveryRun[]
+  deliveries   Delivery[]
+
+  @@index([cityId, isActive, isAvailable])
+  @@map("delivery_partners")
+}
+
+/// One rider's trip: everything leaving one kitchen for one slot on one date.
+/// Stops are explicitly ordered, so route optimisation later just rewrites
+/// `sequence` — no schema change.
+model DeliveryRun {
+  id         String            @id @default(cuid())
+  kitchenId  String
+  timeSlotId String
+  serviceDate DateTime         @db.Date
+  deliveryPartnerId String?
+  status     DeliveryRunStatus @default(PLANNED)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kitchen         Kitchen          @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  timeSlot        TimeSlot         @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  deliveryPartner DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id], onDelete: SetNull)
+  stops           DeliveryStop[]
+
+  @@unique([kitchenId, serviceDate, timeSlotId, deliveryPartnerId])
+  @@index([deliveryPartnerId, serviceDate, status])
+  @@index([serviceDate, status])
+  @@map("delivery_runs")
+}
+
+model DeliveryStop {
+  id            String             @id @default(cuid())
+  deliveryRunId String
+  checkpointId  String
+  sequence      Int
+  status        DeliveryStopStatus @default(PENDING)
+
+  arrivedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveryRun DeliveryRun @relation(fields: [deliveryRunId], references: [id], onDelete: Cascade)
+  checkpoint  Checkpoint  @relation(fields: [checkpointId], references: [id], onDelete: Restrict)
+  deliveries  Delivery[]
+
+  @@unique([deliveryRunId, checkpointId])
+  @@index([deliveryRunId, sequence])
+  @@map("delivery_stops")
+}
+
+/// Proof of delivery for a single order item.
+///
+/// The OTP is hashed, never stored in the clear. The customer (or the parent)
+/// shows the code; the rider enters it; verification flips the order item to
+/// DELIVERED and notifies the buyer.
+model Delivery {
+  id          String @id @default(cuid())
+  orderItemId String @unique
+
+  deliveryStopId    String?
+  deliveryPartnerId String?
+  status            DeliveryStatus @default(PENDING)
+
+  otpHash     String?
+  otpExpiresAt DateTime?
+  otpAttempts Int       @default(0)
+
+  deliveredAt   DateTime?
+  receiverName  String?
+  proofPhotoUrl String?
+  latitude      Float?
+  longitude     Float?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderItem       OrderItem        @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  deliveryStop    DeliveryStop?    @relation(fields: [deliveryStopId], references: [id], onDelete: SetNull)
+  deliveryPartner DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id], onDelete: SetNull)
+
+  @@index([deliveryPartnerId, status])
+  @@index([deliveryStopId])
+  @@map("deliveries")
+}
+
+// ─── Payments ────────────────────────────────────────────────────────────────
+
+/// Provider-agnostic: `provider` + the two provider reference columns +
+/// `rawPayload` are enough for Razorpay, Stripe or a PSP we have not picked
+/// yet, without touching the orders schema.
+model Payment {
+  id      String @id @default(cuid())
+  orderId String
+
+  provider          PaymentProviderName @default(MOCK)
+  /// The provider's order/intent handle, created before the customer pays.
+  providerOrderId   String?
+  /// The provider's payment handle, known after the customer pays.
+  providerPaymentId String?             @unique
+  /// Client-generated key that makes "pay" safe to retry.
+  idempotencyKey    String?             @unique
+
+  amount   Decimal       @db.Decimal(10, 2)
+  currency String        @default("INR")
+  status   PaymentStatus @default(CREATED)
+  method   String?
+  /// Verbatim provider response, for reconciliation and dispute handling.
+  rawPayload Json?
+  failureReason String?
+
+  paidAt   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@index([orderId, status])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model Refund {
+  id        String @id @default(cuid())
+  paymentId String
+
+  providerRefundId String?      @unique
+  amount           Decimal      @db.Decimal(10, 2)
+  status           RefundStatus @default(PENDING)
+  reason           String?
+  rawPayload       Json?
+  processedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, status])
+  @@map("refunds")
+}
+
+/// Stored value. Present from the start because cancellations refund to wallet
+/// and corporate/institution accounts will top up in bulk.
+model Wallet {
+  id       String  @id @default(cuid())
+  userId   String  @unique
+  balance  Decimal @default(0) @db.Decimal(10, 2)
+  currency String  @default("INR")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id       String @id @default(cuid())
+  walletId String
+
+  /// Positive credits, negative debits.
+  amount        Decimal @db.Decimal(10, 2)
+  balanceAfter  Decimal @db.Decimal(10, 2)
+  reason        String
+  referenceType String?
+  referenceId   String?
+
+  createdAt DateTime @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt(sort: Desc)])
+  @@map("wallet_transactions")
+}
+
+// ─── Subscriptions ───────────────────────────────────────────────────────────
+
+/// A standing order: this meal, for this person, on these weekdays, at this
+/// checkpoint and slot, between these dates.
+///
+/// A scheduled job materialises OrderItems from active subscriptions; those
+/// items carry `subscriptionId`, so a subscription's history is queryable
+/// without a parallel "occurrence" table.
+model Subscription {
+  id         String @id @default(cuid())
+  userId     String
+  childId    String?
+  mealId     String
+  kitchenId  String?
+  checkpointId String
+  timeSlotId   String
+
+  startDate DateTime  @db.Date
+  endDate   DateTime? @db.Date
+  /// ISO weekdays the subscription runs on: 1 = Monday … 7 = Sunday.
+  daysOfWeek Int[]    @default([])
+  quantity   Int      @default(1)
+  pricePerMeal Decimal @db.Decimal(10, 2)
+
+  status    SubscriptionStatus @default(ACTIVE)
+  pausedFrom DateTime?         @db.Date
+  pausedTo   DateTime?         @db.Date
+  /// Last service date for which items have been generated — the generator's
+  /// high-water mark, so it is safe to re-run.
+  generatedThrough DateTime?   @db.Date
+  cancelledAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  child      Child?      @relation(fields: [childId], references: [id], onDelete: SetNull)
+  meal       Meal        @relation(fields: [mealId], references: [id], onDelete: Restrict)
+  kitchen    Kitchen?    @relation(fields: [kitchenId], references: [id], onDelete: SetNull)
+  checkpoint Checkpoint  @relation(fields: [checkpointId], references: [id], onDelete: Restrict)
+  timeSlot   TimeSlot    @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
+  orderItems OrderItem[]
+
+  @@index([userId, status])
+  @@index([status, generatedThrough])
+  @@map("subscriptions")
+}
+
+// ─── Notifications & audit ───────────────────────────────────────────────────
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+
+  channel NotificationChannel @default(IN_APP)
+  /// Dotted event name, e.g. "order.delivered" — clients route on this.
+  type    String
+  title   String
+  body    String
+  metadata Json?
+
+  readAt DateTime?
+  sentAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+/// Append-only trail for every privileged mutation. Required for refunds,
+/// suspensions and anything an operator does on a customer's behalf.
+model AuditLog {
+  id          String  @id @default(cuid())
+  actorUserId String?
+  action      String
+  entityType  String
+  entityId    String?
+  before      Json?
+  after       Json?
+  ip          String?
+  userAgent   String?
+
+  createdAt DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}

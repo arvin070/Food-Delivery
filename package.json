@@ -1,0 +1,30 @@
+{
+  "name": "lunch",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lunch — scheduled meal/tiffin delivery platform",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @lunch/shared && npm run build -w @lunch/api && npm run build -w @lunch/web",
+    "dev": "npm run dev:api & npm run dev:web",
+    "dev:api": "npm run dev -w @lunch/api",
+    "dev:web": "npm run dev -w @lunch/web",
+    "db:start": "node scripts/dev-db.mjs start",
+    "db:stop": "node scripts/dev-db.mjs stop",
+    "db:migrate": "npm run db:migrate -w @lunch/api",
+    "db:seed": "npm run db:seed -w @lunch/api",
+    "db:studio": "npm run db:studio -w @lunch/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}
