@@ -8,8 +8,12 @@ import {
   loginSchema,
   registerSchema,
   type ChangePasswordInput,
+  type ConfirmPasswordResetInput,
+  type ConfirmVerificationInput,
   type LoginInput,
   type RegisterInput,
+  type RequestPasswordResetInput,
+  type RequestVerificationInput,
 } from '@lunch/shared';
 import { unauthenticated } from '../../core/errors';
 import { clientIp, created, noContent, ok } from '../../core/http';
@@ -74,3 +78,34 @@ export async function changePasswordHandler(req: Request, res: Response) {
 
 /** Re-exported so routes import schemas and handlers from one place. */
 export const schemas = { registerSchema, loginSchema, changePasswordSchema };
+
+// ─── Password reset ──────────────────────────────────────────────────────────
+
+export async function requestPasswordResetHandler(req: Request, res: Response) {
+  const result = await authService.requestPasswordReset(req.body as RequestPasswordResetInput);
+  // Always 200 with the same shape, so the response cannot be used to discover
+  // which identifiers are registered.
+  return ok(res, result);
+}
+
+export async function confirmPasswordResetHandler(req: Request, res: Response) {
+  await authService.confirmPasswordReset(req.body as ConfirmPasswordResetInput);
+  // Every session was revoked, so clear this client's cookies too.
+  clearAuthCookies(res);
+  return noContent(res);
+}
+
+// ─── Email / phone verification ──────────────────────────────────────────────
+
+export async function requestVerificationHandler(req: Request, res: Response) {
+  const { userId } = requireAuth(req);
+  const { channel } = req.body as RequestVerificationInput;
+  const result = await authService.requestVerification(userId, channel);
+  return ok(res, result);
+}
+
+export async function confirmVerificationHandler(req: Request, res: Response) {
+  const { userId } = requireAuth(req);
+  const user = await authService.confirmVerification(userId, req.body as ConfirmVerificationInput);
+  return ok(res, { user });
+}

@@ -80,3 +80,58 @@ export interface AuthSession {
 }
 
 export const userIdParamSchema = z.object({ userId: idSchema });
+
+// ─── Password reset ──────────────────────────────────────────────────────────
+
+export const requestPasswordResetSchema = z.object({
+  /** Email address or phone number of the account to reset. */
+  identifier: z.string().trim().min(3, 'Enter your email or phone number'),
+});
+export type RequestPasswordResetInput = z.infer<typeof requestPasswordResetSchema>;
+
+export const confirmPasswordResetSchema = z.object({
+  identifier: z.string().trim().min(3, 'Enter your email or phone number'),
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'Enter the 6-digit code'),
+  newPassword: passwordSchema,
+});
+export type ConfirmPasswordResetInput = z.infer<typeof confirmPasswordResetSchema>;
+
+/**
+ * Response to a reset request.
+ *
+ * `sentTo` is masked, and is present whether or not the account exists — the
+ * endpoint must not reveal which identifiers are registered.
+ */
+export interface PasswordResetRequested {
+  sentTo: string;
+  /** Development only: the code, so clients can be exercised without a mailbox. */
+  devCode?: string;
+}
+
+// ─── Email / phone verification ──────────────────────────────────────────────
+
+export const verificationChannelSchema = z.enum(['email', 'phone']);
+export type VerificationChannel = z.infer<typeof verificationChannelSchema>;
+
+export const requestVerificationSchema = z.object({
+  channel: verificationChannelSchema,
+});
+export type RequestVerificationInput = z.infer<typeof requestVerificationSchema>;
+
+export const confirmVerificationSchema = z.object({
+  channel: verificationChannelSchema,
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, 'Enter the 6-digit code'),
+});
+export type ConfirmVerificationInput = z.infer<typeof confirmVerificationSchema>;
+
+export interface VerificationRequested {
+  channel: VerificationChannel;
+  sentTo: string;
+  devCode?: string;
+}
