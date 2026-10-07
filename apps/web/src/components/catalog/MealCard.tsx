@@ -16,8 +16,16 @@ const FOOD_TYPE_DOT: Record<string, string> = {
  * a parent scanning a list for their child should not have to open six dishes
  * to find out which contain peanuts.
  */
-export function MealCard({ meal, checkpointId }: { meal: CatalogMeal; checkpointId?: string }) {
-  const href = `/meals/${meal.mealScheduleId}${checkpointId ? `?checkpointId=${checkpointId}` : ''}`;
+export function MealCard({
+  meal,
+  checkpointId,
+}: {
+  meal: CatalogMeal;
+  checkpointId?: string;
+}) {
+  const params = new URLSearchParams({ serviceDate: meal.serviceDate, timeSlotId: meal.timeSlot.id });
+  if (checkpointId) params.set('checkpointId', checkpointId);
+  const href = `/meals/${meal.mealScheduleId}?${params.toString()}`;
   const lowStock = meal.remaining <= 5;
 
   return (

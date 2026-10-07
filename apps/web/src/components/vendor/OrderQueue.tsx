@@ -32,12 +32,12 @@ export function OrderQueue({ items }: { items: VendorOrderItem[] }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   const groups = useMemo(() => {
-    const map = new Map<string, { slot: string; checkpoint: string; items: VendorOrderItem[] }>();
+    const map = new Map<string, { date: string; slot: string; checkpoint: string; items: VendorOrderItem[] }>();
     for (const item of items) {
-      const key = `${item.timeSlot.id}::${item.checkpoint.id}`;
+      const key = `${item.serviceDate}::${item.timeSlot.id}::${item.checkpoint.id}`;
       const group = map.get(key);
       if (group) group.items.push(item);
-      else map.set(key, { slot: item.timeSlot.label, checkpoint: item.checkpoint.name, items: [item] });
+      else map.set(key, { date: item.serviceDate, slot: item.timeSlot.label, checkpoint: item.checkpoint.name, items: [item] });
     }
     return [...map.entries()].map(([key, value]) => ({ key, ...value }));
   }, [items]);
@@ -121,7 +121,7 @@ export function OrderQueue({ items }: { items: VendorOrderItem[] }) {
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-slate-900">{group.checkpoint}</h3>
                 <p className="text-xs text-slate-500">
-                  {group.slot} · {group.items.length}{' '}
+                  {group.date} · {group.slot} · {group.items.length}{' '}
                   {group.items.length === 1 ? 'meal' : 'meals'}
                 </p>
               </div>

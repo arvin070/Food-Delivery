@@ -72,6 +72,20 @@ Stock is `totalQuantity - reservedQuantity`. `reservedQuantity` is incremented
 inside the same transaction that creates the order, under the row lock, so two
 parents cannot both take the last tiffin.
 
+Checkpoint delivery windows reuse `TimeSlot` and `CheckpointTimeSlot`: the
+former defines local start/end/cutoff times, while the latter enables a slot at
+a checkpoint and may override its capacity and cutoff. `MealSchedule` supplies
+the delivery date and kitchen association. Customer availability combines
+these records and reports checkpoint-window capacity after committed,
+non-cancelled `OrderItem` quantities are counted.
+
+Checkout must call `assertDeliverySlotCapacity` inside the same database
+transaction that creates its `OrderItem` rows. The helper locks the
+`CheckpointTimeSlot` row before counting existing items, so concurrent checkouts
+for the same checkpoint/date/slot serialize. Subscriptions already store the
+same `checkpointId` and `timeSlotId`; their generated dated order items can use
+the same guard without a second scheduling model.
+
 ## 6. Fulfilment state lives on `OrderItem`
 
 An order can span several dates, checkpoints and beneficiaries: a parent buying

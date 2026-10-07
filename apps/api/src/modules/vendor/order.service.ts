@@ -172,6 +172,42 @@ function statusTimestamps(status: OrderItemStatus): Prisma.OrderItemUpdateInput 
   }
 }
 
+async function syncOrderStatuses(
+  tx: Prisma.TransactionClient,
+  orderIds: string[]
+): Promise<void> {
+  for (const orderId of new Set(orderIds)) {
+    const items = await tx.orderItem.findMany({
+      where: { orderId },
+      select: { status: true },
+    });
+    const statuses = items.map((item) => item.status as OrderItemStatus);
+    let status: string = 'PENDING';
+    if (statuses.length > 0 && statuses.every((itemStatus) => itemStatus === OrderItemStatus.CANCELLED)) {
+      status = 'CANCELLED';
+    } else if (statuses.some((itemStatus) => itemStatus === OrderItemStatus.FAILED)) {
+      status = 'FAILED';
+    } else if (statuses.length > 0 && statuses.every((itemStatus) => itemStatus === OrderItemStatus.DELIVERED)) {
+      status = 'DELIVERED';
+    } else if (statuses.includes(OrderItemStatus.AT_CHECKPOINT)) {
+      status = 'AT_CHECKPOINT';
+    } else if (statuses.includes(OrderItemStatus.OUT_FOR_DELIVERY)) {
+      status = 'OUT_FOR_DELIVERY';
+    } else if (statuses.includes(OrderItemStatus.ASSIGNED) || statuses.includes(OrderItemStatus.DISPATCHED)) {
+      status = 'ASSIGNED';
+    } else if (statuses.includes(OrderItemStatus.PACKED)) {
+      status = 'PACKED';
+    } else if (statuses.includes(OrderItemStatus.PREPARING)) {
+      status = 'PREPARING';
+    } else if (statuses.includes(OrderItemStatus.CONFIRMED)) {
+      status = 'CONFIRMED';
+    } else if (statuses.includes(OrderItemStatus.CANCELLED)) {
+      status = 'PARTIALLY_FULFILLED';
+    }
+    await tx.order.update({ where: { id: orderId }, data: { status: status as never } });
+  }
+}
+
 export async function updateOrderItemStatus(
   vendorId: string,
   orderItemId: string,
@@ -180,19 +216,28 @@ export async function updateOrderItemStatus(
   // Ownership is established by the lookup itself.
   const existing = await prisma.orderItem.findFirst({
     where: { id: orderItemId, ...vendorScope(vendorId) },
-    select: { id: true, status: true },
+    select: { id: true, orderId: true, mealScheduleId: true, quantity: true, status: true },
   });
   if (!existing) throw notFound('Order item');
 
   assertTransitionAllowed(existing.status as OrderItemStatus, input.status);
 
-  await prisma.orderItem.update({
-    where: { id: orderItemId },
-    data: {
-      status: input.status,
-      ...statusTimestamps(input.status),
-      ...(input.reason ? { notes: input.reason } : {}),
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.orderItem.update({
+      where: { id: orderItemId },
+      data: {
+        status: input.status,
+        ...statusTimestamps(input.status),
+        ...(input.reason ? { notes: input.reason } : {}),
+      },
+    });
+    if (input.status === OrderItemStatus.CANCELLED && existing.mealScheduleId) {
+      await tx.mealSchedule.updateMany({
+        where: { id: existing.mealScheduleId, reservedQuantity: { gte: existing.quantity } },
+        data: { reservedQuantity: { decrement: existing.quantity } },
+      });
+    }
+    await syncOrderStatuses(tx, [existing.orderId]);
   });
 
   logger.info(
@@ -222,7 +267,7 @@ export async function bulkUpdateOrderItemStatus(
 ): Promise<BulkStatusResult> {
   const rows = await prisma.orderItem.findMany({
     where: { id: { in: input.orderItemIds }, ...vendorScope(vendorId) },
-    select: { id: true, status: true },
+    select: { id: true, orderId: true, status: true },
   });
 
   const found = new Set(rows.map((r) => r.id));
@@ -248,9 +293,15 @@ export async function bulkUpdateOrderItemStatus(
   }
 
   if (movable.length > 0) {
-    await prisma.orderItem.updateMany({
-      where: { id: { in: movable }, ...vendorScope(vendorId) },
-      data: { status: input.status, ...statusTimestamps(input.status) },
+    await prisma.$transaction(async (tx) => {
+      await tx.orderItem.updateMany({
+        where: { id: { in: movable }, ...vendorScope(vendorId) },
+        data: { status: input.status, ...statusTimestamps(input.status) },
+      });
+      await syncOrderStatuses(
+        tx,
+        rows.filter((row) => movable.includes(row.id)).map((row) => row.orderId)
+      );
     });
     result.updated = movable;
   }

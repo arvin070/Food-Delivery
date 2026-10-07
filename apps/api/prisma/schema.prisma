@@ -79,6 +79,8 @@ enum CheckpointType {
   OFFICE_RECEPTION
   HOSTEL
   APARTMENT
+  COMMUNITY_POINT
+  CUSTOM
   OTHER
 }
 
@@ -135,8 +137,16 @@ enum MealScheduleStatus {
 
 enum OrderStatus {
   DRAFT
+  PENDING
   AWAITING_PAYMENT
   CONFIRMED
+  PREPARING
+  PACKED
+  ASSIGNED
+  OUT_FOR_DELIVERY
+  AT_CHECKPOINT
+  DELIVERED
+  FAILED
   PARTIALLY_FULFILLED
   FULFILLED
   CANCELLED
@@ -149,8 +159,10 @@ enum OrderItemStatus {
   CONFIRMED
   PREPARING
   PACKED
+  ASSIGNED
   DISPATCHED
   OUT_FOR_DELIVERY
+  AT_CHECKPOINT
   DELIVERED
   CANCELLED
   FAILED
@@ -174,6 +186,7 @@ enum DeliveryStopStatus {
 enum DeliveryStatus {
   PENDING
   OUT_FOR_DELIVERY
+  AT_CHECKPOINT
   DELIVERED
   FAILED
   RETURNED
@@ -521,12 +534,16 @@ model Checkpoint {
   addressId     String?
 
   latitude  Float?
-  longitude  Float?
+  longitude Float?
   /// Metres. Used to validate a rider's position at proof-of-delivery.
   geofenceRadiusM Int    @default(150)
   /// Free-text guidance for riders ("left of the main gate, near the kiosk").
   instructions    String?
-  isActive        Boolean @default(true)
+  /// Maximum number of meals that can land at this checkpoint per delivery
+  /// window. Null means no platform-level cap (individual slot caps on
+  /// CheckpointTimeSlot still apply).
+  deliveryCapacity Int?
+  isActive         Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -546,6 +563,7 @@ model Checkpoint {
 
   @@index([cityId, isActive])
   @@index([institutionId])
+  @@index([type, isActive])
   @@map("checkpoints")
 }
 
@@ -909,6 +927,7 @@ model Order {
   /// Human-readable, shown to customers and riders. e.g. "LN-24A3F7K2".
   orderNumber String      @unique
   customerId  String
+  idempotencyKey String?
   cityId      String?
   status      OrderStatus @default(AWAITING_PAYMENT)
 
@@ -934,6 +953,7 @@ model Order {
 
   @@index([customerId, createdAt(sort: Desc)])
   @@index([status, createdAt])
+  @@unique([customerId, idempotencyKey])
   @@map("orders")
 }
 

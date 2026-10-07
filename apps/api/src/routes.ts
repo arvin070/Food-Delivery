@@ -8,9 +8,12 @@ import { Router } from 'express';
 import { adminRouter } from './modules/admin/admin.routes';
 import { authRouter } from './modules/auth/auth.routes';
 import { catalogRouter } from './modules/catalog/catalog.routes';
+import { checkpointRouter } from './modules/checkpoint/checkpoint.routes';
+import { cartRouter } from './modules/cart/cart.routes';
 import { childRouter } from './modules/children/child.routes';
 import { deliveryRouter } from './modules/delivery/delivery.routes';
 import { healthRouter } from './modules/health/health.routes';
+import { orderRouter } from './modules/orders/order.routes';
 import { profileRouter } from './modules/profile/profile.routes';
 import { referenceRouter } from './modules/reference/reference.routes';
 import { vendorRouter } from './modules/vendor/vendor.routes';
@@ -33,9 +36,10 @@ apiRouter.use('/catalog', catalogRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/vendor', vendorRouter);
 apiRouter.use('/delivery', deliveryRouter);
+apiRouter.use('/checkpoints', checkpointRouter);
+apiRouter.use('/cart', cartRouter);
+apiRouter.use('/orders', orderRouter);
 
 // Mounted as the modules land:
-//   apiRouter.use('/cart', cartRouter);
-//   apiRouter.use('/orders', ordersRouter);
 //   apiRouter.use('/payments', paymentsRouter);
 //   apiRouter.use('/subscriptions', subscriptionsRouter);

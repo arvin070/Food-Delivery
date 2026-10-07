@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import type { CatalogFacets, CatalogMeal } from '@lunch/shared';
+import type { CatalogFacets, CatalogMeal, DeliverySlotOption } from '@lunch/shared';
 import { apiServer } from '@/lib/api.server';
 import { requireUser } from '@/lib/session';
 import { CatalogFilters } from '@/components/catalog/CatalogFilters';
@@ -49,17 +49,40 @@ export default async function MealsPage({
 }) {
   const user = await requireUser('/meals');
   const params = await searchParams;
-  const checkpointId = typeof params['checkpointId'] === 'string' ? params['checkpointId'] : undefined;
-
-  const [catalog, { dates }, { checkpoints }] = await Promise.all([
-    apiServer.getWithMeta<CatalogMeal[], { facets: CatalogFacets; total: number }>(
-      `/catalog/meals?${toApiQuery(params)}`
-    ),
+  const requestedCheckpointId = typeof params['checkpointId'] === 'string' ? params['checkpointId'] : '';
+  const [{ dates }, { checkpoints }] = await Promise.all([
     apiServer.get<{ dates: string[] }>(
-      `/catalog/dates${checkpointId ? `?checkpointId=${checkpointId}` : ''}`
+      `/catalog/dates${requestedCheckpointId ? `?checkpointId=${requestedCheckpointId}` : ''}`
     ),
     apiServer.get<{ checkpoints: { id: string; name: string }[] }>('/reference/checkpoints'),
   ]);
+  const checkpointId = checkpoints.some((checkpoint) => checkpoint.id === requestedCheckpointId)
+    ? requestedCheckpointId
+    : '';
+  const requestedDate = typeof params['serviceDate'] === 'string' ? params['serviceDate'] : '';
+  const serviceDate = dates.includes(requestedDate) ? requestedDate : dates[0] ?? '';
+  const deliverySlots =
+    checkpointId && serviceDate
+      ? await apiServer.get<{ slots: DeliverySlotOption[] }>(
+          `/catalog/delivery-slots?${new URLSearchParams({ checkpointId, serviceDate })}`
+        ).then(({ slots }) => slots).catch(() => [])
+      : [];
+  const requestedTimeSlotId = typeof params['timeSlotId'] === 'string' ? params['timeSlotId'] : '';
+  const selectedSlot = deliverySlots.find(
+    (slot) => slot.timeSlotId === requestedTimeSlotId && slot.orderable
+  );
+  const canBrowse = Boolean(checkpointId && serviceDate && selectedSlot);
+  const catalog = canBrowse
+    ? await apiServer.getWithMeta<CatalogMeal[], { facets: CatalogFacets; total: number }>(
+        `/catalog/meals?${toApiQuery({ ...params, checkpointId, serviceDate, timeSlotId: requestedTimeSlotId })}`
+      )
+    : {
+        data: [],
+        meta: {
+          total: 0,
+          facets: { mealPeriods: [], foodTypes: [], categories: [], priceRange: null },
+        },
+      };
 
   const meals = catalog.data;
   const firstName = user.fullName.split(' ')[0] ?? user.fullName;
@@ -71,7 +94,7 @@ export default async function MealsPage({
           Browse meals, {firstName}
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Pick a date and a checkpoint — we only show what can reach you there.
+            Choose a delivery date, checkpoint, and available time before browsing meals.
         </p>
       </div>
 
@@ -83,12 +106,15 @@ export default async function MealsPage({
             facets={catalog.meta.facets}
             dates={dates}
             checkpoints={checkpoints}
+            deliverySlots={deliverySlots}
           />
         </aside>
 
         <section>
           <p className="mb-3 text-sm text-slate-500">
-            {catalog.meta.total} {catalog.meta.total === 1 ? 'meal' : 'meals'} available
+            {canBrowse
+              ? `${catalog.meta.total} ${catalog.meta.total === 1 ? 'meal' : 'meals'} available`
+              : 'Choose a date, checkpoint, and available time slot to continue.'}
           </p>
 
           {meals.length === 0 ? (

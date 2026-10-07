@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Allergen, ErrorCode, MealScheduleStatus, VendorStatus } from '@lunch/shared';
 import { prisma } from '../src/core/prisma';
 import { api, cleanupTestUsers, disconnect, registerUser } from './helpers';
+import { assertDeliverySlotCapacity } from '../src/modules/catalog/catalog.service';
 
 const SEED_PASSWORD = 'Lunch@1234';
 
@@ -23,6 +24,8 @@ let checkpointId: string;
 let unservedCheckpointId: string;
 let lunchSlotId: string;
 let breakfastSlotId: string;
+let capacityWindowOriginal: { id: string; maxOrders: number | null };
+let capacityTestOrderPrefix: string;
 
 async function signIn(identifier: string, password = SEED_PASSWORD): Promise<string> {
   const res = await api().post('/api/v1/auth/login').send({ identifier, password }).expect(200);
@@ -72,9 +75,20 @@ beforeAll(async () => {
   ]);
   lunchSlotId = lunch.id;
   breakfastSlotId = breakfast.id;
+  const capacityWindow = await prisma.checkpointTimeSlot.findUniqueOrThrow({
+    where: { checkpointId_timeSlotId: { checkpointId, timeSlotId: lunchSlotId } },
+    select: { id: true, maxOrders: true },
+  });
+  capacityWindowOriginal = capacityWindow;
+  capacityTestOrderPrefix = `SLOT-CAPACITY-TEST-${Date.now()}-`;
 });
 
 afterAll(async () => {
+  await prisma.order.deleteMany({ where: { orderNumber: { startsWith: capacityTestOrderPrefix } } });
+  await prisma.checkpointTimeSlot.update({
+    where: { id: capacityWindowOriginal.id },
+    data: { maxOrders: capacityWindowOriginal.maxOrders },
+  });
   await prisma.checkpoint.deleteMany({ where: { name: 'Unserved Test Gate' } });
   await cleanupTestUsers();
   await disconnect();
@@ -154,6 +168,99 @@ describe('customers cannot modify menu data', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('browsing the catalog', () => {
+  it('lists active dated windows for the selected checkpoint', async () => {
+    const res = await api()
+      .get(`/api/v1/catalog/delivery-slots?serviceDate=${dateIso(1)}&checkpointId=${checkpointId}`)
+      .set('Authorization', customerAuth())
+      .expect(200);
+
+    expect(res.body.data.slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          timeSlotId: lunchSlotId,
+          startMinute: expect.any(Number),
+          endMinute: expect.any(Number),
+          orderable: true,
+        }),
+      ])
+    );
+  });
+
+  it('rejects impossible calendar dates', async () => {
+    await api()
+      .get(`/api/v1/catalog/delivery-slots?serviceDate=2026-02-30&checkpointId=${checkpointId}`)
+      .set('Authorization', customerAuth())
+      .expect(422);
+  });
+
+  it('requires a checkpoint and an allowed window for selected delivery times', async () => {
+    await api()
+      .get(`/api/v1/catalog/meals?serviceDate=${dateIso(1)}&timeSlotId=${lunchSlotId}`)
+      .set('Authorization', customerAuth())
+      .expect(400);
+
+    await api()
+      .get(
+        `/api/v1/catalog/meals?serviceDate=${dateIso(1)}&checkpointId=${unservedCheckpointId}&timeSlotId=${lunchSlotId}`
+      )
+      .set('Authorization', customerAuth())
+      .expect(400);
+  });
+
+  it('serializes concurrent reservations at the checkpoint capacity limit', async () => {
+    await prisma.checkpointTimeSlot.update({
+      where: { id: capacityWindowOriginal.id },
+      data: { maxOrders: 1 },
+    });
+    const [customer, schedule] = await Promise.all([
+      prisma.user.findFirstOrThrow({ where: { email: 'customer@lunch.test' }, select: { id: true } }),
+      prisma.mealSchedule.findFirstOrThrow({
+        where: { timeSlotId: lunchSlotId },
+        select: { id: true, mealId: true, kitchenId: true, price: true },
+      }),
+    ]);
+    const serviceDate = dateIso(45);
+
+    const attempt = (suffix: string) =>
+      prisma.$transaction(async (tx) => {
+        await assertDeliverySlotCapacity(tx, {
+          checkpointId,
+          timeSlotId: lunchSlotId,
+          serviceDate,
+          quantity: 1,
+        });
+        const order = await tx.order.create({
+          data: {
+            orderNumber: `${capacityTestOrderPrefix}${suffix}`,
+            customerId: customer.id,
+            subtotal: '100.00',
+            totalAmount: '100.00',
+          },
+          select: { id: true },
+        });
+        await tx.orderItem.create({
+          data: {
+            orderId: order.id,
+            mealScheduleId: schedule.id,
+            mealId: schedule.mealId,
+            kitchenId: schedule.kitchenId,
+            checkpointId,
+            timeSlotId: lunchSlotId,
+            serviceDate: new Date(`${serviceDate}T00:00:00Z`),
+            beneficiaryName: 'Capacity Test',
+            mealNameSnapshot: 'Capacity Test Meal',
+            unitPrice: schedule.price,
+            quantity: 1,
+            lineTotal: schedule.price,
+          },
+        });
+      });
+
+    const results = await Promise.allSettled([attempt('A'), attempt('B')]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+  });
+
   it('returns meals for today with everything the card needs', async () => {
     const res = await api()
       .get(`/api/v1/catalog/meals?serviceDate=${dateIso(1)}&checkpointId=${checkpointId}`)

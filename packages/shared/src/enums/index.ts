@@ -58,9 +58,24 @@ export const CheckpointType = {
   OFFICE_RECEPTION: 'OFFICE_RECEPTION',
   HOSTEL: 'HOSTEL',
   APARTMENT: 'APARTMENT',
+  COMMUNITY_POINT: 'COMMUNITY_POINT',
+  CUSTOM: 'CUSTOM',
   OTHER: 'OTHER',
 } as const;
 export type CheckpointType = (typeof CheckpointType)[keyof typeof CheckpointType];
+
+/** Human labels for checkpoint type display. */
+export const CHECKPOINT_TYPE_LABELS: Record<CheckpointType, string> = {
+  COLLEGE_GATE: 'College',
+  SCHOOL_GATE: 'School',
+  BUS_CHECKPOINT: 'Bus Stop',
+  OFFICE_RECEPTION: 'Office',
+  HOSTEL: 'Hostel',
+  APARTMENT: 'Apartment',
+  COMMUNITY_POINT: 'Community Point',
+  CUSTOM: 'Custom',
+  OTHER: 'Other',
+};
 
 export const MealPeriod = {
   BREAKFAST: 'BREAKFAST',
@@ -151,8 +166,16 @@ export type MealScheduleStatus = (typeof MealScheduleStatus)[keyof typeof MealSc
 /** Roll-up status of a whole order. Derived from its items. */
 export const OrderStatus = {
   DRAFT: 'DRAFT',
+  PENDING: 'PENDING',
   AWAITING_PAYMENT: 'AWAITING_PAYMENT',
   CONFIRMED: 'CONFIRMED',
+  PREPARING: 'PREPARING',
+  PACKED: 'PACKED',
+  ASSIGNED: 'ASSIGNED',
+  OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
+  AT_CHECKPOINT: 'AT_CHECKPOINT',
+  DELIVERED: 'DELIVERED',
+  FAILED: 'FAILED',
   PARTIALLY_FULFILLED: 'PARTIALLY_FULFILLED',
   FULFILLED: 'FULFILLED',
   CANCELLED: 'CANCELLED',
@@ -172,8 +195,10 @@ export const OrderItemStatus = {
   CONFIRMED: 'CONFIRMED',
   PREPARING: 'PREPARING',
   PACKED: 'PACKED',
+  ASSIGNED: 'ASSIGNED',
   DISPATCHED: 'DISPATCHED',
   OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
+  AT_CHECKPOINT: 'AT_CHECKPOINT',
   DELIVERED: 'DELIVERED',
   CANCELLED: 'CANCELLED',
   FAILED: 'FAILED',
@@ -207,6 +232,7 @@ export type DeliveryStopStatus = (typeof DeliveryStopStatus)[keyof typeof Delive
 export const DeliveryStatus = {
   PENDING: 'PENDING',
   OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
+  AT_CHECKPOINT: 'AT_CHECKPOINT',
   DELIVERED: 'DELIVERED',
   FAILED: 'FAILED',
   RETURNED: 'RETURNED',

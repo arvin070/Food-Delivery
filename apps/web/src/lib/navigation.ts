@@ -28,17 +28,20 @@ export interface PlannedSection {
 export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   CUSTOMER: [
     { href: '/meals', label: 'Browse meals' },
+    { href: '/cart', label: 'Cart' },
     { href: '/children', label: 'My children' },
     { href: '/orders', label: 'My orders' },
     { href: '/profile', label: 'Profile' },
   ],
   STUDENT: [
     { href: '/meals', label: 'Browse meals' },
+    { href: '/cart', label: 'Cart' },
     { href: '/orders', label: 'My orders' },
     { href: '/profile', label: 'Profile' },
   ],
   PARENT: [
     { href: '/meals', label: 'Browse meals' },
+    { href: '/cart', label: 'Cart' },
     { href: '/children', label: 'My children' },
     { href: '/orders', label: 'My orders' },
     { href: '/profile', label: 'Profile' },
@@ -57,11 +60,13 @@ export const NAV_BY_ROLE: Record<UserRole, NavItem[]> = {
   ],
   INSTITUTION_ADMIN: [
     { href: '/institution', label: 'Overview' },
+    { href: '/admin/checkpoints', label: 'Checkpoints' },
     { href: '/profile', label: 'Profile' },
   ],
   SUPER_ADMIN: [
     { href: '/admin', label: 'Dashboard' },
     { href: '/admin/vendors', label: 'Vendors' },
+    { href: '/admin/checkpoints', label: 'Checkpoints' },
     { href: '/profile', label: 'Profile' },
   ],
 };

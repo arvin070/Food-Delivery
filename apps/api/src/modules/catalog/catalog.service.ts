@@ -23,12 +23,14 @@ import {
   type CatalogFacets,
   type CatalogMeal,
   type CatalogMealDetail,
+  type DeliverySlotOption,
+  type DeliverySlotsQuery,
   type FoodType,
   type MealPeriod,
   type Nutrition,
   type PaginatedResult,
 } from '@lunch/shared';
-import { notFound } from '../../core/errors';
+import { badRequest, conflict, notFound } from '../../core/errors';
 import { buildPaginatedResult, toMoney, toSkipTake } from '../../core/http';
 import { prisma } from '../../core/prisma';
 
@@ -221,6 +223,32 @@ function orderBy(sort: BrowseCatalogQuery['sort']): Prisma.MealScheduleOrderByWi
 export async function browse(
   query: BrowseCatalogQuery
 ): Promise<{ result: PaginatedResult<CatalogMeal>; facets: CatalogFacets }> {
+  if (query.timeSlotId) {
+    if (!query.checkpointId) {
+      throw badRequest('Choose a checkpoint before selecting a delivery time', {
+        checkpointId: ['Required when selecting a delivery window'],
+      });
+    }
+    const date = query.serviceDate ?? todayUtc().toISOString().slice(0, 10);
+    const slots = await availableDeliverySlots({
+      checkpointId: query.checkpointId,
+      serviceDate: date,
+    });
+    const selected = slots.find((slot) => slot.timeSlotId === query.timeSlotId);
+    if (!selected) {
+      throw badRequest('This delivery window is not active for the selected checkpoint', {
+        timeSlotId: ['Choose an active delivery window for this checkpoint'],
+      });
+    }
+    if (!selected.orderable) {
+      throw conflict(
+        selected.remainingOrders === 0
+          ? 'The delivery window has reached its order capacity'
+          : 'The ordering cutoff for this delivery window has passed'
+      );
+    }
+  }
+
   const where = visibleWhere(query);
   const { skip, take } = toSkipTake(query);
 
@@ -380,4 +408,197 @@ export async function availableDates(
   });
 
   return rows.map((r) => r.serviceDate.toISOString().slice(0, 10));
+}
+
+/**
+ * Dated checkpoint windows backed by the reusable checkpoint/time-slot link.
+ * The kitchen list is derived from published meal schedules for this date.
+ */
+export async function availableDeliverySlots(
+  query: DeliverySlotsQuery
+): Promise<DeliverySlotOption[]> {
+  const serviceDate = new Date(`${query.serviceDate}T00:00:00Z`);
+  if (serviceDate < todayUtc()) {
+    throw badRequest('Delivery date cannot be in the past', {
+      serviceDate: ['Choose today or a future date'],
+    });
+  }
+
+  const checkpoint = await prisma.checkpoint.findFirst({
+    where: { id: query.checkpointId, isActive: true },
+    select: { id: true, deliveryCapacity: true },
+  });
+  if (!checkpoint) throw notFound('Checkpoint');
+
+  const windows = await prisma.checkpointTimeSlot.findMany({
+    where: {
+      checkpointId: checkpoint.id,
+      isActive: true,
+      timeSlot: { isActive: true },
+    },
+    select: {
+      timeSlotId: true,
+      maxOrders: true,
+      orderCutoffMinutes: true,
+      timeSlot: {
+        select: {
+          label: true,
+          mealPeriod: true,
+          startMinute: true,
+          endMinute: true,
+          orderCutoffMinutes: true,
+        },
+      },
+    },
+    orderBy: { timeSlot: { startMinute: 'asc' } },
+  });
+  if (windows.length === 0) return [];
+
+  const timeSlotIds = windows.map((window) => window.timeSlotId);
+  const [bookedRows, schedules] = await Promise.all([
+    prisma.orderItem.groupBy({
+      by: ['timeSlotId'],
+      where: {
+        checkpointId: checkpoint.id,
+        serviceDate,
+        timeSlotId: { in: timeSlotIds },
+        status: { notIn: ['CANCELLED', 'FAILED'] },
+      },
+      _sum: { quantity: true },
+    }),
+    prisma.mealSchedule.findMany({
+      where: {
+        serviceDate,
+        timeSlotId: { in: timeSlotIds },
+        status: MealScheduleStatus.PUBLISHED,
+        kitchen: {
+          isActive: true,
+          deletedAt: null,
+          vendor: { status: VendorStatus.APPROVED, isActive: true, deletedAt: null },
+          serviceAreas: { some: { checkpointId: checkpoint.id, isActive: true } },
+        },
+        meal: { isActive: true, deletedAt: null },
+      },
+      distinct: ['kitchenId'],
+      select: { timeSlotId: true, kitchen: { select: { id: true, name: true } } },
+    }),
+  ]);
+
+  const bookedBySlot = new Map(
+    bookedRows.map((row) => [row.timeSlotId, row._sum.quantity ?? 0])
+  );
+  const kitchensBySlot = new Map<string, Map<string, { id: string; name: string }>>();
+  for (const schedule of schedules) {
+    const kitchens = kitchensBySlot.get(schedule.timeSlotId) ?? new Map();
+    kitchens.set(schedule.kitchen.id, schedule.kitchen);
+    kitchensBySlot.set(schedule.timeSlotId, kitchens);
+  }
+
+  return windows.map((window) => {
+    const limits = [window.maxOrders, checkpoint.deliveryCapacity].filter(
+      (limit): limit is number => limit !== null
+    );
+    const maxOrders = limits.length ? Math.min(...limits) : null;
+    const bookedOrders = bookedBySlot.get(window.timeSlotId) ?? 0;
+    const cutoffMinutes = window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes;
+    const remainingOrders = maxOrders === null ? null : Math.max(0, maxOrders - bookedOrders);
+    return {
+      timeSlotId: window.timeSlotId,
+      label: window.timeSlot.label,
+      mealPeriod: window.timeSlot.mealPeriod as MealPeriod,
+      startMinute: window.timeSlot.startMinute,
+      endMinute: window.timeSlot.endMinute,
+      maxOrders,
+      bookedOrders,
+      remainingOrders,
+      orderable:
+        isOrderable(serviceDate, window.timeSlot.startMinute, cutoffMinutes) &&
+        remainingOrders !== 0,
+      kitchens: [...(kitchensBySlot.get(window.timeSlotId)?.values() ?? [])],
+    };
+  });
+}
+
+/**
+ * Checkout must call this inside the same transaction that creates its order
+ * items. Locking the checkpoint window serializes competing reservations;
+ * cancelled and failed items release their capacity.
+ */
+export async function assertDeliverySlotCapacity(
+  tx: Prisma.TransactionClient,
+  input: { checkpointId: string; timeSlotId: string; serviceDate: string; quantity: number }
+): Promise<void> {
+  const serviceDate = new Date(`${input.serviceDate}T00:00:00Z`);
+  if (
+    Number.isNaN(serviceDate.getTime()) ||
+    serviceDate.toISOString().slice(0, 10) !== input.serviceDate
+  ) {
+    throw badRequest('Invalid delivery date', { serviceDate: ['Use a real YYYY-MM-DD date'] });
+  }
+  if (!Number.isInteger(input.quantity) || input.quantity < 1) {
+    throw badRequest('Quantity must be a positive whole number', {
+      quantity: ['Enter at least one meal'],
+    });
+  }
+
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "checkpoint_time_slots"
+    WHERE "checkpointId" = ${input.checkpointId}
+      AND "timeSlotId" = ${input.timeSlotId}
+      AND "isActive" = true
+    FOR UPDATE
+  `;
+  if (rows.length === 0) {
+    throw badRequest('This delivery window is not available at the checkpoint', {
+      timeSlotId: ['Choose an active delivery window for this checkpoint'],
+    });
+  }
+
+  const [checkpoint, window] = await Promise.all([
+    tx.checkpoint.findFirst({
+      where: { id: input.checkpointId, isActive: true },
+      select: { deliveryCapacity: true },
+    }),
+    tx.checkpointTimeSlot.findFirst({
+      where: { checkpointId: input.checkpointId, timeSlotId: input.timeSlotId, isActive: true },
+      select: {
+        maxOrders: true,
+        orderCutoffMinutes: true,
+        timeSlot: {
+          select: { isActive: true, startMinute: true, orderCutoffMinutes: true },
+        },
+      },
+    }),
+  ]);
+  if (!checkpoint || !window?.timeSlot.isActive) {
+    throw badRequest('Checkpoint or delivery window is inactive');
+  }
+  if (serviceDate < todayUtc()) {
+    throw badRequest('Delivery date cannot be in the past', {
+      serviceDate: ['Choose today or a future date'],
+    });
+  }
+  const cutoff = window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes;
+  if (!isOrderable(serviceDate, window.timeSlot.startMinute, cutoff)) {
+    throw conflict('The ordering cutoff for this delivery window has passed');
+  }
+
+  const limits = [window.maxOrders, checkpoint.deliveryCapacity].filter(
+    (limit): limit is number => limit !== null
+  );
+  if (limits.length === 0) return;
+  const maxOrders = Math.min(...limits);
+  const committed = await tx.orderItem.aggregate({
+    where: {
+      checkpointId: input.checkpointId,
+      timeSlotId: input.timeSlotId,
+      serviceDate,
+      status: { notIn: ['CANCELLED', 'FAILED'] },
+    },
+    _sum: { quantity: true },
+  });
+  const booked = committed._sum.quantity ?? 0;
+  if (booked + input.quantity > maxOrders) {
+    throw conflict('The delivery window has reached its order capacity');
+  }
 }

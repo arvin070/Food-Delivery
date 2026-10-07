@@ -8,6 +8,7 @@ import {
   FOOD_TYPE_LABELS,
   MEAL_PERIOD_LABELS,
   type CatalogFacets,
+  type DeliverySlotOption,
 } from '@lunch/shared';
 
 /**
@@ -20,10 +21,12 @@ export function CatalogFilters({
   facets,
   dates,
   checkpoints,
+  deliverySlots,
 }: {
   facets: CatalogFacets;
   dates: string[];
   checkpoints: { id: string; name: string }[];
+  deliverySlots: DeliverySlotOption[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -34,6 +37,7 @@ export function CatalogFilters({
       const next = new URLSearchParams(params.toString());
       if (value === null || value === '') next.delete(key);
       else next.set(key, value);
+      if (key === 'serviceDate' || key === 'checkpointId') next.delete('timeSlotId');
       next.delete('page');
       router.push(`${pathname}?${next.toString()}`);
     },
@@ -56,6 +60,16 @@ export function CatalogFilters({
   );
 
   const excluded = params.getAll('excludeAllergens');
+  const queryDate = params.get('serviceDate');
+  const selectedDate = dates.includes(queryDate ?? '') ? queryDate! : dates[0] ?? '';
+  const queryCheckpoint = params.get('checkpointId');
+  const selectedCheckpoint = checkpoints.some((checkpoint) => checkpoint.id === queryCheckpoint)
+    ? queryCheckpoint!
+    : '';
+  const queryTimeSlot = params.get('timeSlotId');
+  const selectedTimeSlot = deliverySlots.some((slot) => slot.timeSlotId === queryTimeSlot)
+    ? queryTimeSlot!
+    : '';
   const selectClass =
     'w-full rounded-md border-0 py-2 pl-3 pr-8 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-brand-600';
 
@@ -68,9 +82,10 @@ export function CatalogFilters({
         <select
           id="f-date"
           className={`mt-1.5 ${selectClass}`}
-          value={params.get('serviceDate') ?? dates[0] ?? ''}
+          value={selectedDate}
           onChange={(e) => setParam('serviceDate', e.target.value)}
         >
+          <option value="">Select a date</option>
           {dates.map((d) => (
             <option key={d} value={d}>
               {new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', {
@@ -91,16 +106,41 @@ export function CatalogFilters({
         <select
           id="f-checkpoint"
           className={`mt-1.5 ${selectClass}`}
-          value={params.get('checkpointId') ?? ''}
+          value={selectedCheckpoint}
           onChange={(e) => setParam('checkpointId', e.target.value)}
         >
-          <option value="">Any checkpoint</option>
+          <option value="">Select a checkpoint</option>
           {checkpoints.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>
           ))}
         </select>
+      </div>
+
+      <div>
+        <label htmlFor="f-time-slot" className="block text-sm font-medium text-slate-900">
+          Delivery time
+        </label>
+        <select
+          id="f-time-slot"
+          className={`mt-1.5 ${selectClass}`}
+          value={selectedTimeSlot}
+          onChange={(e) => setParam('timeSlotId', e.target.value)}
+          disabled={!selectedCheckpoint || !deliverySlots.length}
+        >
+          <option value="">Select an available time</option>
+          {deliverySlots.map((slot) => (
+            <option key={slot.timeSlotId} value={slot.timeSlotId} disabled={!slot.orderable}>
+              {slot.label} · {formatSlotTime(slot.startMinute)}–{formatSlotTime(slot.endMinute)}
+              {slot.remainingOrders !== null ? ` · ${slot.remainingOrders} left` : ''}
+              {!slot.orderable && slot.remainingOrders === 0 ? ' · Full' : ''}
+            </option>
+          ))}
+        </select>
+        {selectedCheckpoint && deliverySlots.length === 0 && (
+          <p className="mt-1 text-xs text-slate-500">No active delivery windows for this date.</p>
+        )}
       </div>
 
       <div>
@@ -181,4 +221,10 @@ export function CatalogFilters({
       </fieldset>
     </div>
   );
+}
+
+function formatSlotTime(minutes: number): string {
+  const hour24 = Math.floor(minutes / 60);
+  const hour = hour24 % 12 || 12;
+  return `${hour}:${String(minutes % 60).padStart(2, '0')} ${hour24 < 12 ? 'AM' : 'PM'}`;
 }

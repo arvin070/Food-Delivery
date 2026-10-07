@@ -30,7 +30,10 @@ export const nameSchema = z.string().trim().min(2, 'Too short').max(120, 'Too lo
 export const dateOnlySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD')
-  .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)), 'Not a real date');
+  .refine((v) => {
+    const date = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === v;
+  }, 'Not a real date');
 
 /** Minutes from midnight, local to the city's timezone. 0–1439. */
 export const minuteOfDaySchema = z.number().int().min(0).max(1439);

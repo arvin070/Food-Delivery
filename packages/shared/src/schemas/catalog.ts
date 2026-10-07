@@ -137,6 +137,25 @@ export const browseCatalogQuerySchema = paginationSchema.extend({
 });
 export type BrowseCatalogQuery = z.infer<typeof browseCatalogQuerySchema>;
 
+export const deliverySlotsQuerySchema = z.object({
+  serviceDate: dateOnlySchema,
+  checkpointId: idSchema,
+});
+export type DeliverySlotsQuery = z.infer<typeof deliverySlotsQuerySchema>;
+
+export interface DeliverySlotOption {
+  timeSlotId: string;
+  label: string;
+  mealPeriod: MealPeriod;
+  startMinute: number;
+  endMinute: number;
+  maxOrders: number | null;
+  bookedOrders: number;
+  remainingOrders: number | null;
+  orderable: boolean;
+  kitchens: { id: string; name: string }[];
+}
+
 export const mealScheduleIdParamSchema = z.object({ mealScheduleId: idSchema });
 
 /** A purchasable meal: the dish, pinned to a date, slot, kitchen and price. */

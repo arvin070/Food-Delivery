@@ -1,0 +1,15 @@
+ALTER TYPE "OrderStatus" ADD VALUE 'PENDING';
+ALTER TYPE "OrderStatus" ADD VALUE 'PREPARING';
+ALTER TYPE "OrderStatus" ADD VALUE 'PACKED';
+ALTER TYPE "OrderStatus" ADD VALUE 'ASSIGNED';
+ALTER TYPE "OrderStatus" ADD VALUE 'OUT_FOR_DELIVERY';
+ALTER TYPE "OrderStatus" ADD VALUE 'AT_CHECKPOINT';
+ALTER TYPE "OrderStatus" ADD VALUE 'DELIVERED';
+ALTER TYPE "OrderStatus" ADD VALUE 'FAILED';
+
+ALTER TYPE "OrderItemStatus" ADD VALUE 'ASSIGNED';
+ALTER TYPE "OrderItemStatus" ADD VALUE 'AT_CHECKPOINT';
+
+ALTER TABLE "orders" ADD COLUMN "idempotencyKey" TEXT;
+CREATE UNIQUE INDEX "orders_customerId_idempotencyKey_key"
+  ON "orders"("customerId", "idempotencyKey");

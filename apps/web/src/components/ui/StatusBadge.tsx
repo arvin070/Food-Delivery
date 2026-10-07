@@ -15,6 +15,9 @@ const STYLES: Record<string, string> = {
   PENDING_APPROVAL: 'bg-amber-50 text-amber-800 ring-amber-200',
   SUSPENDED: 'bg-red-50 text-red-700 ring-red-200',
   REJECTED: 'bg-red-50 text-red-700 ring-red-200',
+  // Generic active / inactive
+  active: 'bg-green-50 text-green-700 ring-green-200',
+  inactive: 'bg-slate-100 text-slate-500 ring-slate-200',
 };
 
 const LABELS: Record<string, string> = {

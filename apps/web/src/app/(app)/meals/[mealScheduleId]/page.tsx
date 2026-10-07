@@ -7,12 +7,14 @@ import {
   MEAL_PERIOD_LABELS,
   formatCurrency,
   type CatalogMealDetail,
+  type Child,
 } from '@lunch/shared';
 import { apiServer } from '@/lib/api.server';
 import { isApiError } from '@/lib/api-error';
 import { requireUser } from '@/lib/session';
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
+import { AddToCartForm } from '@/components/catalog/AddToCartForm';
 
 export const metadata: Metadata = { title: 'Meal details' };
 
@@ -21,13 +23,14 @@ export default async function MealDetailPage({
   searchParams,
 }: {
   params: Promise<{ mealScheduleId: string }>;
-  searchParams: Promise<{ checkpointId?: string }>;
+  searchParams: Promise<{ checkpointId?: string; serviceDate?: string; timeSlotId?: string }>;
 }) {
-  await requireUser();
+  const user = await requireUser();
   const { mealScheduleId } = await params;
-  const { checkpointId } = await searchParams;
+  const { checkpointId, serviceDate, timeSlotId } = await searchParams;
 
   let meal: CatalogMealDetail;
+  let children: Child[] = [];
   try {
     const query = checkpointId ? `?checkpointId=${checkpointId}` : '';
     ({ meal } = await apiServer.get<{ meal: CatalogMealDetail }>(
@@ -38,7 +41,15 @@ export default async function MealDetailPage({
     throw err;
   }
 
-  const backHref = `/meals${checkpointId ? `?checkpointId=${checkpointId}` : ''}`;
+  if (user.role === 'PARENT' || user.role === 'CUSTOMER') {
+    ({ children } = await apiServer.get<{ children: Child[] }>('/children'));
+  }
+
+  const backParams = new URLSearchParams();
+  if (serviceDate) backParams.set('serviceDate', serviceDate);
+  if (checkpointId) backParams.set('checkpointId', checkpointId);
+  if (timeSlotId) backParams.set('timeSlotId', timeSlotId);
+  const backHref = `/meals${backParams.size ? `?${backParams.toString()}` : ''}`;
   const nutrition = [
     { label: 'Calories', value: meal.nutrition.calories, unit: 'kcal' },
     { label: 'Protein', value: meal.nutrition.proteinG, unit: 'g' },
@@ -133,9 +144,17 @@ export default async function MealDetailPage({
             </Alert>
           )}
 
-          <Button size="lg" disabled className="w-full">
-            {meal.orderable ? 'Add to cart (coming with the ordering module)' : 'Ordering closed'}
-          </Button>
+          {meal.orderable && checkpointId ? (
+            <AddToCartForm
+              mealScheduleId={meal.mealScheduleId}
+              checkpointId={checkpointId}
+              children={children}
+            />
+          ) : (
+            <Button size="lg" disabled className="w-full">
+              {meal.orderable ? 'Choose a checkpoint to order' : 'Ordering closed'}
+            </Button>
+          )}
         </div>
       </div>
 

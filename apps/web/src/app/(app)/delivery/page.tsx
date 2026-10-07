@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
 import { UserRole } from '@lunch/shared';
-import { ModuleShell } from '@/components/ModuleShell';
-import { plannedSectionsFor } from '@/lib/navigation';
+import { apiServer } from '@/lib/api.server';
 import { requireRole } from '@/lib/session';
+import { DeliveryQueue, type DeliveryQueueItem } from '@/components/delivery/DeliveryQueue';
 
 export const metadata: Metadata = { title: 'Deliveries' };
 
@@ -10,12 +10,14 @@ export const metadata: Metadata = { title: 'Deliveries' };
 export default async function DeliveryPage() {
   const user = await requireRole([UserRole.DELIVERY_PARTNER, UserRole.SUPER_ADMIN], '/delivery');
 
+  const { deliveries } = await apiServer.get<{ deliveries: DeliveryQueueItem[] }>('/delivery/items');
   return (
-    <ModuleShell
-      title="My deliveries"
-      subtitle={`Signed in as ${user.fullName}. Assigned runs, checkpoint order and proof of delivery.`}
-      moduleName="delivery module"
-      sections={plannedSectionsFor(UserRole.DELIVERY_PARTNER)}
-    />
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">My deliveries</h1>
+        <p className="mt-1 text-sm text-slate-500">Signed in as {user.fullName}. Checkpoint assignments and handover progress.</p>
+      </div>
+      <DeliveryQueue deliveries={deliveries} />
+    </div>
   );
 }

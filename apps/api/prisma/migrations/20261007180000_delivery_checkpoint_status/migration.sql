@@ -1,0 +1,1 @@
+ALTER TYPE "DeliveryStatus" ADD VALUE 'AT_CHECKPOINT';

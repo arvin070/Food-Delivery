@@ -10,6 +10,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   browseCatalogQuerySchema,
+  deliverySlotsQuerySchema,
   mealScheduleIdParamSchema,
 } from '@lunch/shared';
 import { asyncHandler, ok, paginated } from '../../core/http';
@@ -22,6 +23,15 @@ export const catalogRouter = Router();
 catalogRouter.use(authenticate);
 
 /** Browse what can be delivered to a checkpoint on a date. */
+catalogRouter.get(
+  '/delivery-slots',
+  validateQuery(deliverySlotsQuerySchema),
+  asyncHandler(async (req, res) => {
+    const slots = await catalogService.availableDeliverySlots(req.query as never);
+    return ok(res, { slots });
+  })
+);
+
 catalogRouter.get(
   '/meals',
   validateQuery(browseCatalogQuerySchema),
