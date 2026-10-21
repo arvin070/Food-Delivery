@@ -28,7 +28,7 @@ beforeAll(async () => {
   });
   const unrelated = await prisma.checkpoint.findFirstOrThrow({
     where: { institutionId: { not: membership.institution.id } },
-    select: { id: true },
+    select: { id: true, institutionId: true },
   });
   unrelatedCheckpointId = unrelated.id;
 
