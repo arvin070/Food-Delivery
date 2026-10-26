@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Lunch PostgreSQL backup schedule
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

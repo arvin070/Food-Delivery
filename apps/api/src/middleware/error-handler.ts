@@ -6,6 +6,7 @@ import { logger } from '../core/logger';
 import { Prisma } from '../core/prisma';
 import { isProduction } from '../config/env';
 import { zodToDetails } from './validate';
+import * as Sentry from '@sentry/node';
 
 /** 404 for any route that did not match. Mounted last, before the error handler. */
 export const notFoundHandler: RequestHandler = (_req, _res, next) => {
@@ -101,7 +102,7 @@ export const errorHandler: ErrorRequestHandler = (
     cause: appError.cause,
     requestId,
     method: req.method,
-    path: req.originalUrl,
+    path: req.path,
     userId: req.auth?.userId,
   };
 
@@ -109,6 +110,7 @@ export const errorHandler: ErrorRequestHandler = (
     logger.debug(logPayload, appError.message);
   } else {
     logger.error(logPayload, `Unhandled error: ${appError.message}`);
+    Sentry.captureException(appError, { extra: { requestId, method: req.method, path: req.path } });
   }
 
   const body: ApiErrorBody = {

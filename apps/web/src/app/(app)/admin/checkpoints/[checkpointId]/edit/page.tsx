@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { UserRole, type CheckpointDetail } from '@lunch/shared';
+import { UserRole, type CheckpointDetail, type CheckpointSummary } from '@lunch/shared';
 import { apiServer } from '@/lib/api.server';
 import { requireRole } from '@/lib/session';
 import { CheckpointForm } from '@/components/checkpoints/CheckpointForm';
 import type { RefOption } from '@/lib/reference';
+import { CheckpointExceptionManager } from '@/components/checkpoints/CheckpointExceptionManager';
 
 export const metadata: Metadata = { title: 'Edit checkpoint · Admin' };
 
@@ -37,7 +38,10 @@ export default async function EditCheckpointPage({
   const checkpointResult = await apiServer.get<{checkpoint:CheckpointDetail}>(`/checkpoints/${checkpointId}`).catch(()=>null);
   if (!checkpointResult) notFound();
   const { checkpoint } = checkpointResult;
-  const reference = await loadCheckpointFormRef(checkpoint);
+  const [reference, replacementResult] = await Promise.all([
+    loadCheckpointFormRef(checkpoint),
+    apiServer.getWithMeta<CheckpointSummary[], { total: number; page: number; totalPages: number }>(`/checkpoints?${new URLSearchParams({ cityId: checkpoint.city.id, isActive: 'true', pageSize: '100' })}`),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -48,6 +52,7 @@ export default async function EditCheckpointPage({
         <p className="mt-1 text-sm text-slate-500">{checkpoint.name}</p>
       </div>
       <CheckpointForm checkpoint={checkpoint} reference={reference} />
+      <CheckpointExceptionManager checkpoint={checkpoint} replacements={replacementResult.data} />
     </div>
   );
 }

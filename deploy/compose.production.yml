@@ -1,0 +1,96 @@
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  web:
+    image: ${WEB_IMAGE:?Set WEB_IMAGE to an immutable registry tag}
+    restart: unless-stopped
+    logging: *default-logging
+    env_file: ${WEB_ENV_FILE:-/etc/lunch/web-production.env}
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      API_INTERNAL_URL: http://api:4000
+      NEXT_PUBLIC_APP_NAME: Lunch
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [app]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+      - /app/apps/web/.next/cache:size=64m,noexec,nosuid
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  api:
+    image: ${API_IMAGE:?Set API_IMAGE to an immutable registry tag}
+    restart: unless-stopped
+    logging: *default-logging
+    env_file: ${LUNCH_ENV_FILE:-/etc/lunch/production.env}
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+      API_TRUST_PROXY_HOPS: 1
+    expose: ["4000"]
+    networks: [app]
+    read_only: true
+    tmpfs: [/tmp:size=64m,noexec,nosuid]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    init: true
+
+  migrate:
+    image: ${API_IMAGE:?Set API_IMAGE to an immutable registry tag}
+    profiles: [migration]
+    logging: *default-logging
+    env_file: ${MIGRATION_ENV_FILE:-/etc/lunch/migration-production.env}
+    environment:
+      NODE_ENV: production
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy", "--schema=apps/api/prisma/schema.prisma"]
+    networks: [app]
+    security_opt: [no-new-privileges:true]
+
+  caddy:
+    image: caddy:2.9-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      DOMAIN: ${DOMAIN:?Set the public application domain}
+      ACME_EMAIL: ${ACME_EMAIL:?Set the certificate contact email}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    networks: [edge, app]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  edge: {}
+  app: {}
+
+volumes:
+  caddy_data:
+  caddy_config:

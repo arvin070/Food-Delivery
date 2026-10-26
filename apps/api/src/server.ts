@@ -9,8 +9,10 @@ import { createApp } from './app';
 import { env } from './config/env';
 import { logger } from './core/logger';
 import { connectDatabase, disconnectDatabase } from './core/prisma';
+import * as Sentry from '@sentry/node';
 
 async function main() {
+  if (env.SENTRY_DSN) Sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV, tracesSampleRate: 0.05, sendDefaultPii: false });
   await connectDatabase();
 
   const stopSubscriptions = startSubscriptionWorker();
@@ -45,6 +47,7 @@ async function main() {
         await stopNotifications();
         await stopTracking();
         await disconnectDatabase();
+        await Sentry.close(2000);
       } catch (dbErr) {
         logger.error({ err: dbErr }, 'Error while disconnecting the database');
       }

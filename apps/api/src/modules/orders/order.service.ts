@@ -1,4 +1,4 @@
-import { slotInstant, cityToday } from '../subscriptions/recurrence';
+import { cityToday, slotInstant } from '../subscriptions/recurrence';
 import { releaseCorporateFunding } from '../corporate/funding';
 import { randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -165,7 +165,6 @@ export async function checkout(userId: string, idempotencyKey: string): Promise<
             price: true,
             totalQuantity: true,
             reservedQuantity: true,
-            timeSlot: { select: { startMinute: true, orderCutoffMinutes: true } },
             meal: { select: { name: true } },
             kitchen: {
               select: {
@@ -182,8 +181,6 @@ export async function checkout(userId: string, idempotencyKey: string): Promise<
 
         const today = cityToday(schedule.kitchen.city.timezone);
         if (schedule.serviceDate < today) throw badRequest('A delivery date in your cart has passed');
-        const cutoff = new Date(slotInstant(schedule.serviceDate, schedule.timeSlot.startMinute, schedule.kitchen.city.timezone).getTime() - schedule.timeSlot.orderCutoffMinutes * 60000);
-        if (Date.now() >= cutoff.getTime()) throw conflict('Ordering cutoff has passed for a cart item');
         if (schedule.totalQuantity - schedule.reservedQuantity < cartItem.quantity) {
           throw conflict('Not enough meal stock remains for a cart item');
         }

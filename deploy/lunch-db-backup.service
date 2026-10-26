@@ -1,0 +1,15 @@
+[Unit]
+Description=Encrypted Lunch PostgreSQL backup upload
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lunch-deploy
+Group=docker
+EnvironmentFile=/etc/lunch/backup-production.env
+ExecStart=/usr/bin/bash /opt/lunch/deploy/backup-managed-postgres.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

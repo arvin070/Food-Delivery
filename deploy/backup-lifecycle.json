@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "LunchDatabaseBackupRetention",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "lunch/" },
+      "Expiration": { "Days": 35 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 14 }
+    }
+  ]
+}

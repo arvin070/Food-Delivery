@@ -43,7 +43,11 @@ const cartSelect = {
           },
         },
       },
-      checkpoint: { select: { id: true, name: true, isActive: true } },
+      checkpoint: { select: {
+        id: true, name: true, isActive: true, city: { select: { timezone: true } },
+        timeSlots: { select: { timeSlotId: true, orderCutoffMinutes: true, weekdays: true, preparationBufferMinutes: true, travelBufferMinutes: true } },
+        scheduleExceptions: { where: { endDate: { gte: new Date() } }, select: { startDate: true, endDate: true, timeSlotId: true } },
+      } },
       child: { select: { id: true, fullName: true, isActive: true, deletedAt: true } },
     },
   },
@@ -59,6 +63,10 @@ function toCartItem(item: CartRow['items'][number]): CartItemView {
   const schedule = item.mealSchedule;
   const date = schedule.serviceDate;
   const remaining = Math.max(0, schedule.totalQuantity - schedule.reservedQuantity);
+  const checkpointWindow = item.checkpoint.timeSlots.find(window => window.timeSlotId === schedule.timeSlot.id);
+  const weekday = date.getUTCDay() === 0 ? 7 : date.getUTCDay();
+  const closed = item.checkpoint.scheduleExceptions.some(exception => exception.startDate <= date && exception.endDate >= date && (exception.timeSlotId === null || exception.timeSlotId === schedule.timeSlot.id));
+  const checkpointCutoff = checkpointWindow?.orderCutoffMinutes ?? schedule.timeSlot.orderCutoffMinutes;
   const orderable =
     schedule.status === MealScheduleStatus.PUBLISHED &&
     item.checkpoint.isActive &&
@@ -71,7 +79,8 @@ function toCartItem(item: CartRow['items'][number]): CartItemView {
     schedule.kitchen.vendor.isActive &&
     schedule.kitchen.vendor.deletedAt === null &&
     date >= cityToday(schedule.kitchen.city.timezone) &&
-    isBeforeCutoff(date, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes, schedule.kitchen.city.timezone) &&
+    !!checkpointWindow && checkpointWindow.weekdays.includes(weekday) && !closed &&
+    isBeforeCutoff(date, schedule.timeSlot.startMinute, checkpointCutoff + checkpointWindow.preparationBufferMinutes + checkpointWindow.travelBufferMinutes, item.checkpoint.city.timezone) &&
     remaining >= item.quantity &&
     (!item.child || (item.child.isActive && item.child.deletedAt === null));
   const unitPrice = toMoney(schedule.price);
@@ -157,7 +166,7 @@ async function validateAdd(
 
   const checkpoint = await tx.checkpoint.findFirst({
     where: { id: input.checkpointId, isActive: true },
-    select: { id: true },
+    select: { id: true, cityId: true, city: { select: { timezone: true } } },
   });
   if (!checkpoint) throw badRequest('Checkpoint is not available', { checkpointId: ['Choose an active checkpoint'] });
 
@@ -169,7 +178,7 @@ async function validateAdd(
         isActive: true,
         timeSlot: { isActive: true },
       },
-      select: { id: true },
+      select: { id: true, weekdays: true, orderCutoffMinutes: true, preparationBufferMinutes: true, travelBufferMinutes: true },
     }),
     tx.kitchenServiceArea.findFirst({
       where: { kitchenId: schedule.kitchen.id, checkpointId: checkpoint.id, isActive: true },
@@ -182,7 +191,14 @@ async function validateAdd(
   if (schedule.serviceDate < cityToday(schedule.kitchen.city.timezone)) {
     throw badRequest('Delivery date has passed', { mealScheduleId: ['Choose a future delivery'] });
   }
-  if (!isBeforeCutoff(schedule.serviceDate, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes, schedule.kitchen.city.timezone)) {
+  const weekday = schedule.serviceDate.getUTCDay() === 0 ? 7 : schedule.serviceDate.getUTCDay();
+  if (!window.weekdays.includes(weekday)) throw badRequest('This checkpoint is not scheduled on the selected day');
+  const [holiday, exception] = await Promise.all([
+    tx.serviceHoliday.findFirst({ where: { serviceDate: schedule.serviceDate, OR: [{ cityId: null }, { cityId: checkpoint.cityId }] }, select: { id: true } }),
+    tx.checkpointScheduleException.findFirst({ where: { checkpointId: checkpoint.id, startDate: { lte: schedule.serviceDate }, endDate: { gte: schedule.serviceDate }, OR: [{ timeSlotId: null }, { timeSlotId: schedule.timeSlotId }] }, select: { id: true } }),
+  ]);
+  if (holiday || exception) throw badRequest('This checkpoint window is unavailable on the selected date');
+  if (!isBeforeCutoff(schedule.serviceDate, schedule.timeSlot.startMinute, (window.orderCutoffMinutes ?? schedule.timeSlot.orderCutoffMinutes) + window.preparationBufferMinutes + window.travelBufferMinutes, checkpoint.city.timezone)) {
     throw badRequest('Ordering cutoff has passed', { mealScheduleId: ['Choose another delivery time'] });
   }
   if (schedule.totalQuantity - schedule.reservedQuantity < input.quantity) {

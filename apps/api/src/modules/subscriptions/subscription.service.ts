@@ -101,8 +101,13 @@ export async function generateDate(id: string, serviceDate: Date) {
     if (sub.pausedFrom && !sub.pausedTo && serviceDate >= sub.pausedFrom) return 'PAUSED';
     if (sub.user.status !== 'ACTIVE' || sub.user.deletedAt || (sub.childId && (!sub.child?.isActive || sub.child.deletedAt))) return 'BENEFICIARY_UNAVAILABLE';
     if (await tx.subscriptionSkip.findUnique({ where: { subscriptionId_serviceDate: { subscriptionId: id, serviceDate } } })) return 'SKIPPED';
-    const checkpoint = await tx.checkpoint.findUniqueOrThrow({ where: { id: sub.checkpointId } });
-    if (await tx.serviceHoliday.count({ where: { serviceDate, OR: [{ cityId: null }, { cityId: checkpoint.cityId }] } })) return 'HOLIDAY';
+    const configuredCheckpoint = await tx.checkpoint.findUniqueOrThrow({ where: { id: sub.checkpointId }, include: { city: true } });
+    if (await tx.serviceHoliday.count({ where: { serviceDate, OR: [{ cityId: null }, { cityId: configuredCheckpoint.cityId }] } })) return 'HOLIDAY';
+    const exception = await tx.checkpointScheduleException.findFirst({ where: { checkpointId: sub.checkpointId, startDate: { lte: serviceDate }, endDate: { gte: serviceDate }, OR: [{ timeSlotId: null }, { timeSlotId: sub.timeSlotId }] } });
+    if (exception && !exception.replacementCheckpointId) return 'CHECKPOINT_CLOSED';
+    const checkpointId = exception?.replacementCheckpointId ?? sub.checkpointId;
+    const checkpoint = checkpointId === sub.checkpointId ? configuredCheckpoint : await tx.checkpoint.findFirst({ where: { id: checkpointId, cityId: configuredCheckpoint.cityId, isActive: true }, include: { city: true } });
+    if (!checkpoint) return 'CHECKPOINT_UNAVAILABLE';
     const existing = await tx.orderItem.findUnique({ where: { subscriptionId_serviceDate: { subscriptionId: id, serviceDate } }, include: { order: true } });
     const restore = existing?.status === 'CANCELLED' && existing.order.cancellationReason === 'Subscription pause';
     if (existing && !restore) return 'ALREADY_GENERATED';
@@ -111,22 +116,24 @@ export async function generateDate(id: string, serviceDate: Date) {
     if (!schedule) return 'MEAL_UNAVAILABLE';
     await tx.$queryRaw`SELECT id FROM meal_schedules WHERE id = ${schedule.id} FOR UPDATE`;
     if (schedule.totalQuantity - schedule.reservedQuantity < sub.quantity) return 'MEAL_CAPACITY';
-    if (!await tx.kitchenServiceArea.count({ where: { kitchenId: schedule.kitchenId, checkpointId: sub.checkpointId, isActive: true } })) return 'CHECKPOINT_UNAVAILABLE';
-    const window = await tx.checkpointTimeSlot.findUnique({ where: { checkpointId_timeSlotId: { checkpointId: sub.checkpointId, timeSlotId: sub.timeSlotId } } });
-    if (slotInstant(serviceDate, schedule.timeSlot.startMinute, sub.checkpoint.city.timezone).getTime() - (window?.orderCutoffMinutes ?? schedule.timeSlot.orderCutoffMinutes) * 60000 <= Date.now()) return 'CUTOFF_PASSED';
-    await assertDeliverySlotCapacity(tx, { checkpointId: sub.checkpointId, timeSlotId: sub.timeSlotId, serviceDate: dateKey(serviceDate), quantity: sub.quantity, timezone: sub.checkpoint.city.timezone });
+    if (!await tx.kitchenServiceArea.count({ where: { kitchenId: schedule.kitchenId, checkpointId, isActive: true } })) return 'CHECKPOINT_UNAVAILABLE';
+    const window = await tx.checkpointTimeSlot.findUnique({ where: { checkpointId_timeSlotId: { checkpointId, timeSlotId: sub.timeSlotId } } });
+    const weekday = serviceDate.getUTCDay() === 0 ? 7 : serviceDate.getUTCDay();
+    if (!window?.isActive || !window.weekdays.includes(weekday)) return 'CHECKPOINT_UNAVAILABLE';
+    if (slotInstant(serviceDate, schedule.timeSlot.startMinute, checkpoint.city.timezone).getTime() - ((window.orderCutoffMinutes ?? schedule.timeSlot.orderCutoffMinutes) + window.preparationBufferMinutes + window.travelBufferMinutes) * 60000 <= Date.now()) return 'CUTOFF_PASSED';
+    await assertDeliverySlotCapacity(tx, { checkpointId, timeSlotId: sub.timeSlotId, serviceDate: dateKey(serviceDate), quantity: sub.quantity, timezone: checkpoint.city.timezone });
     await tx.$queryRaw`SELECT id FROM kitchens WHERE id = ${schedule.kitchenId} FOR UPDATE`;
     const committed = await tx.orderItem.aggregate({ where: { kitchenId: schedule.kitchenId, timeSlotId: sub.timeSlotId, serviceDate, status: { notIn: ['CANCELLED','FAILED'] } }, _sum: { quantity: true } });
     if ((committed._sum.quantity ?? 0) + sub.quantity > schedule.kitchen.capacityPerSlot) return 'KITCHEN_CAPACITY';
     const amount = sub.pricePerMeal.mul(sub.quantity);
     // PER_ORDER records a payable obligation; no provider charge or paid status is fabricated.
     if (existing && restore) {
-      await tx.orderItem.update({ where: { id: existing.id }, data: { status: 'PENDING', cancelledAt: null, mealScheduleId: schedule.id } });
+      await tx.orderItem.update({ where: { id: existing.id }, data: { status: 'PENDING', cancelledAt: null, mealScheduleId: schedule.id, checkpointId } });
       await tx.order.update({ where: { id: existing.orderId }, data: { status: 'AWAITING_PAYMENT', cancelledAt: null, cancellationReason: null } });
     } else await tx.order.create({ data: {
       customerId: sub.userId, cityId: checkpoint.cityId, orderNumber: `LN-${randomBytes(8).toString('hex').toUpperCase()}`, idempotencyKey: `subscription:${id}:${dateKey(serviceDate)}`, status: 'AWAITING_PAYMENT', subtotal: amount, totalAmount: amount, placedAt: new Date(),
       payments: { create: { amount, status: 'CREATED' } },
-      items: { create: { subscriptionId: id, mealScheduleId: schedule.id, mealId: sub.mealId, kitchenId: schedule.kitchenId, checkpointId: sub.checkpointId, timeSlotId: sub.timeSlotId, serviceDate, childId: sub.childId, beneficiaryName: sub.child?.fullName ?? sub.user.fullName, mealNameSnapshot: schedule.meal.name, unitPrice: sub.pricePerMeal, quantity: sub.quantity, lineTotal: amount } },
+      items: { create: { subscriptionId: id, mealScheduleId: schedule.id, mealId: sub.mealId, kitchenId: schedule.kitchenId, checkpointId, timeSlotId: sub.timeSlotId, serviceDate, childId: sub.childId, beneficiaryName: sub.child?.fullName ?? sub.user.fullName, mealNameSnapshot: schedule.meal.name, unitPrice: sub.pricePerMeal, quantity: sub.quantity, lineTotal: amount } },
     } });
     await tx.mealSchedule.update({ where: { id: schedule.id }, data: { reservedQuantity: { increment: sub.quantity } } });
     await tx.subscription.update({ where: { id }, data: { generatedThrough: !sub.generatedThrough || serviceDate > sub.generatedThrough ? serviceDate : sub.generatedThrough } });

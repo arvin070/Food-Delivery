@@ -18,6 +18,7 @@ import type { Prisma } from '@prisma/client';
 import type {
   CheckpointDetail,
   CheckpointSummary,
+  CheckpointScheduleExceptionInput,
   CreateCheckpointInput,
   DeliveryWindow,
   ListCheckpointsQuery,
@@ -27,6 +28,8 @@ import { badRequest, conflict, forbidden, notFound } from '../../core/errors';
 import { buildPaginatedResult, toSkipTake } from '../../core/http';
 import { logger } from '../../core/logger';
 import { prisma } from '../../core/prisma';
+import { enqueueNotifications } from '../notifications/notification.service';
+import { cityToday, dateKey, slotInstant } from '../subscriptions/recurrence';
 import type { PaginatedResult } from '@lunch/shared';
 
 // ─── Select shapes ────────────────────────────────────────────────────────────
@@ -76,6 +79,9 @@ const checkpointDetailSelect = {
       timeSlotId: true,
       maxOrders: true,
       orderCutoffMinutes: true,
+      weekdays: true,
+      preparationBufferMinutes: true,
+      travelBufferMinutes: true,
       isActive: true,
       timeSlot: { select: { label: true, mealPeriod: true } },
     },
@@ -112,6 +118,9 @@ function toDetail(row: DetailRow): CheckpointDetail {
     mealPeriod: cts.timeSlot.mealPeriod,
     maxOrders: cts.maxOrders,
     orderCutoffMinutes: cts.orderCutoffMinutes,
+    weekdays: cts.weekdays,
+    preparationBufferMinutes: cts.preparationBufferMinutes,
+    travelBufferMinutes: cts.travelBufferMinutes,
     isActive: cts.isActive,
   }));
 
@@ -182,6 +191,130 @@ async function adminInstitutionIds(userId: string): Promise<string[]> {
     select: { institutionId: true },
   });
   return memberships.map((m) => m.institutionId);
+}
+
+export async function createScheduleException(checkpointId: string, input: CheckpointScheduleExceptionInput, callerRole: string, callerUserId: string) {
+  const startDate = new Date(`${input.startDate}T00:00:00.000Z`);
+  const endDate = new Date(`${input.endDate}T00:00:00.000Z`);
+  return prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM checkpoints WHERE id=${checkpointId} FOR UPDATE`;
+    const checkpoint = await tx.checkpoint.findUnique({ where: { id: checkpointId }, select: { id: true, cityId: true, institutionId: true, city: { select: { timezone: true } } } });
+    if (!checkpoint) throw notFound('Checkpoint');
+    if (callerRole === 'INSTITUTION_ADMIN') {
+      if (!checkpoint.institutionId) throw forbidden('You can only manage checkpoints in your institution');
+      const membership = await tx.institutionMember.count({ where: { userId: callerUserId, institutionId: checkpoint.institutionId, role: 'ADMIN', isActive: true, institution: { isActive: true } } });
+      if (!membership) throw forbidden('You are not an admin of that institution');
+    } else if (callerRole !== 'SUPER_ADMIN') throw forbidden('Checkpoint operations access required');
+    if (startDate < cityToday(checkpoint.city.timezone)) throw badRequest('Schedule exceptions must start today or later');
+    if (input.replacementCheckpointId && !input.timeSlotId) throw badRequest('Choose a specific delivery window for reassignment');
+    if (input.timeSlotId && !await tx.checkpointTimeSlot.count({ where: { checkpointId, timeSlotId: input.timeSlotId, isActive: true } })) throw badRequest('The selected window is not active at this checkpoint');
+    if (await tx.checkpointScheduleException.count({ where: {
+      checkpointId, startDate: { lte: endDate }, endDate: { gte: startDate },
+      ...(input.timeSlotId ? { OR: [{ timeSlotId: null }, { timeSlotId: input.timeSlotId }] } : {}),
+    } })) throw conflict('An overlapping checkpoint exception already exists');
+
+    const bookings = await tx.orderItem.findMany({
+      where: { checkpointId, serviceDate: { gte: startDate, lte: endDate }, ...(input.timeSlotId ? { timeSlotId: input.timeSlotId } : {}), status: { notIn: ['CANCELLED', 'FAILED', 'DELIVERED'] } },
+      select: {
+        id: true,
+        serviceDate: true,
+        timeSlotId: true,
+        quantity: true,
+        kitchenId: true,
+        status: true,
+        delivery: { select: { id: true, deliveryStop: { select: { deliveryRun: { select: { status: true, startedAt: true } } } } } },
+        order: { select: { customerId: true } },
+        child: { select: { parentId: true, isActive: true } },
+        mealNameSnapshot: true,
+        beneficiaryName: true,
+      },
+      take: 501,
+    });
+    if (bookings.length > 500) throw conflict('More than 500 bookings are affected; contact platform operations');
+    if (bookings.some(item => item.delivery?.deliveryStop?.deliveryRun?.startedAt || item.delivery?.deliveryStop?.deliveryRun?.status === 'IN_PROGRESS')) throw conflict('A rider route has started for an affected delivery');
+
+    let replacementName: string | null = null;
+    if (input.replacementCheckpointId) {
+      const replacement = await tx.checkpoint.findFirst({ where: { id: input.replacementCheckpointId, cityId: checkpoint.cityId, isActive: true, OR: [{ institutionId: null }, { institution: { isActive: true } }] }, select: { id: true, name: true, deliveryCapacity: true } });
+      if (!replacement || !input.timeSlotId) throw badRequest('Replacement checkpoint must be active in the same city');
+      const replacementWindow = await tx.checkpointTimeSlot.findFirst({ where: { checkpointId: replacement.id, timeSlotId: input.timeSlotId, isActive: true }, select: { maxOrders: true, weekdays: true } });
+      if (!replacementWindow) throw badRequest('Replacement checkpoint does not serve this delivery window');
+      replacementName = replacement.name;
+      for (const booking of bookings) {
+        const localDay = booking.serviceDate.getUTCDay() === 0 ? 7 : booking.serviceDate.getUTCDay();
+        if (!replacementWindow.weekdays.includes(localDay)) throw conflict('Replacement checkpoint is not scheduled on every affected day');
+        const [holiday, closure] = await Promise.all([
+          tx.serviceHoliday.count({ where: { serviceDate: booking.serviceDate, OR: [{ cityId: null }, { cityId: checkpoint.cityId }] } }),
+          tx.checkpointScheduleException.count({ where: { checkpointId: replacement.id, startDate: { lte: booking.serviceDate }, endDate: { gte: booking.serviceDate }, OR: [{ timeSlotId: null }, { timeSlotId: input.timeSlotId }] } }),
+        ]);
+        if (holiday || closure) throw conflict('Replacement checkpoint is unavailable on an affected date');
+        if (!await tx.kitchenServiceArea.count({ where: { kitchenId: booking.kitchenId, checkpointId: replacement.id, isActive: true } })) throw conflict('A booked kitchen does not serve the replacement checkpoint');
+        if (booking.delivery) throw conflict('An assigned delivery must be rerouted before checkpoint reassignment');
+      }
+      const limits = [replacementWindow.maxOrders, replacement.deliveryCapacity].filter((value): value is number => value !== null);
+      if (limits.length) {
+        const max = Math.min(...limits);
+        for (const booking of bookings) {
+          const existing = await tx.orderItem.aggregate({ where: { checkpointId: replacement.id, serviceDate: booking.serviceDate, timeSlotId: booking.timeSlotId, status: { notIn: ['CANCELLED', 'FAILED'] } }, _sum: { quantity: true } });
+          const moved = bookings.filter(other => other.serviceDate.getTime() === booking.serviceDate.getTime() && other.timeSlotId === booking.timeSlotId).reduce((total, other) => total + other.quantity, 0);
+          if ((existing._sum.quantity ?? 0) + moved > max) throw conflict('Replacement checkpoint lacks capacity for the affected deliveries');
+        }
+      }
+    } else if (bookings.length) {
+      throw conflict('Resolve existing bookings before closing this checkpoint window');
+    }
+
+    const row = await tx.checkpointScheduleException.create({ data: {
+      checkpointId, timeSlotId: input.timeSlotId ?? null, replacementCheckpointId: input.replacementCheckpointId ?? null,
+      startDate, endDate, reason: input.reason, createdByUserId: callerUserId,
+    }, include: { replacementCheckpoint: { select: { name: true } } } });
+    if (input.replacementCheckpointId) {
+      for (const booking of bookings) await tx.orderItem.update({ where: { id: booking.id }, data: { checkpointId: input.replacementCheckpointId } });
+      await enqueueNotifications(tx, bookings.flatMap(item => {
+        const recipients = new Set([item.order.customerId]);
+        if (item.child?.isActive) recipients.add(item.child.parentId);
+        return [...recipients].map(userId => ({ userId, event: 'checkpoint.changed' as const, key: `checkpoint-exception:${row.id}:item:${item.id}`, data: { beneficiary: item.beneficiaryName, meal: item.mealNameSnapshot, checkpoint: replacementName! } }));
+      }));
+    }
+    const subscriptions = await tx.subscription.findMany({ where: { checkpointId, status: 'ACTIVE', startDate: { lte: endDate }, OR: [{ endDate: null }, { endDate: { gte: startDate } }] }, select: { id: true, userId: true, child: { select: { parentId: true, isActive: true, deletedAt: true } } }, take: 1000 });
+    await enqueueNotifications(tx, subscriptions.flatMap(subscription => {
+      const recipients = new Set([subscription.userId]);
+      if (subscription.child?.isActive && !subscription.child.deletedAt) recipients.add(subscription.child.parentId);
+      const change = replacementName ? `This checkpoint is temporarily reassigned to ${replacementName}` : 'This checkpoint is temporarily unavailable';
+      return [...recipients].map(userId => ({ userId, event: 'checkpoint.changed' as const, key: `checkpoint-exception:${row.id}:subscription:${subscription.id}:user:${userId}`, data: { checkpoint: replacementName ?? checkpointId, reason: `${change} ${input.startDate} through ${input.endDate}. ${input.reason}.` } }));
+    }));
+    await tx.auditLog.create({ data: { actorUserId: callerUserId, action: input.replacementCheckpointId ? 'checkpoint.reassigned' : 'checkpoint.closed', entityType: 'CheckpointScheduleException', entityId: row.id, after: { checkpointId, startDate: input.startDate, endDate: input.endDate, timeSlotId: input.timeSlotId ?? null, replacementCheckpointId: input.replacementCheckpointId ?? null, reason: input.reason } } });
+    return { id: row.id, startDate: input.startDate, endDate: input.endDate, timeSlotId: row.timeSlotId, replacementCheckpointId: row.replacementCheckpointId, replacementCheckpointName: row.replacementCheckpoint?.name ?? null, reason: row.reason };
+  });
+}
+
+export async function operationsDashboard(callerRole: string, callerUserId: string) {
+  let where: Prisma.CheckpointWhereInput = {};
+  if (callerRole === 'INSTITUTION_ADMIN') where.institutionId = { in: await adminInstitutionIds(callerUserId) };
+  else if (callerRole !== 'SUPER_ADMIN') throw forbidden('Checkpoint operations access required');
+  const checkpoints = await prisma.checkpoint.findMany({ where, take: 500, orderBy: { name: 'asc' }, select: {
+    id: true, name: true, type: true, isActive: true, deliveryCapacity: true, city: { select: { timezone: true } },
+    timeSlots: { where: { isActive: true }, select: { timeSlotId: true, maxOrders: true, weekdays: true, timeSlot: { select: { label: true, startMinute: true, endMinute: true } } } },
+  } });
+  const todayItems = await prisma.orderItem.findMany({ where: { serviceDate: { gte: new Date(Date.now() - 86400000), lte: new Date(Date.now() + 86400000) }, checkpointId: { in: checkpoints.map(c => c.id) }, status: { notIn: ['CANCELLED', 'FAILED'] } }, select: {
+    id: true, checkpointId: true, serviceDate: true, timeSlotId: true, quantity: true, status: true, timeSlot: { select: { label: true, startMinute: true } },
+    delivery: { select: { status: true, deliveryPartner: { select: { user: { select: { fullName: true } } } } } }, checkpoint: { select: { city: { select: { timezone: true } } } },
+  } });
+  const exceptions = await prisma.checkpointScheduleException.findMany({ where: { checkpointId: { in: checkpoints.map(c => c.id) }, endDate: { gte: new Date(Date.now() - 86400000) } }, include: { replacementCheckpoint: { select: { name: true } } }, orderBy: { startDate: 'asc' }, take: 200 });
+  return {
+    generatedAt: new Date().toISOString(),
+    checkpoints: checkpoints.map(checkpoint => {
+      const localToday = dateKey(cityToday(checkpoint.city.timezone));
+      const items = todayItems.filter(item => item.checkpointId === checkpoint.id && item.serviceDate.toISOString().slice(0, 10) === localToday);
+      const totalMeals = items.reduce((sum, item) => sum + item.quantity, 0);
+      const windows = checkpoint.timeSlots.map(window => {
+        const bookings = items.filter(item => item.timeSlotId === window.timeSlotId);
+        const limitValues = [window.maxOrders, checkpoint.deliveryCapacity].filter((value): value is number => value !== null);
+        return { label: window.timeSlot.label, startMinute: window.timeSlot.startMinute, meals: bookings.reduce((sum, item) => sum + item.quantity, 0), capacity: limitValues.length ? Math.min(...limitValues) : null, delayed: bookings.filter(item => ['OUT_FOR_DELIVERY', 'AT_CHECKPOINT'].includes(item.status) && slotInstant(item.serviceDate, window.timeSlot.endMinute, checkpoint.city.timezone).getTime() < Date.now()).length, riders: [...new Set(bookings.map(item => item.delivery?.deliveryPartner?.user.fullName).filter((name): name is string => !!name))] };
+      });
+      return { id: checkpoint.id, name: checkpoint.name, type: checkpoint.type, active: checkpoint.isActive, meals: totalMeals, capacity: checkpoint.deliveryCapacity, windows, unavailable: exceptions.filter(exception => exception.checkpointId === checkpoint.id).map(exception => ({ startDate: dateKey(exception.startDate), endDate: dateKey(exception.endDate), timeSlotId: exception.timeSlotId, reason: exception.reason, replacementCheckpointName: exception.replacementCheckpoint?.name ?? null })) };
+    }),
+  };
 }
 
 // ─── Public read operations ───────────────────────────────────────────────────
@@ -375,6 +508,9 @@ export async function createCheckpoint(
       timeSlot: { connect: { id: w.timeSlotId } },
       maxOrders: w.maxOrders ?? null,
       orderCutoffMinutes: w.orderCutoffMinutes ?? null,
+      weekdays: w.weekdays,
+      preparationBufferMinutes: w.preparationBufferMinutes,
+      travelBufferMinutes: w.travelBufferMinutes,
       isActive: w.isActive,
     })) ?? [];
 
@@ -579,6 +715,9 @@ async function syncWindows(
         data: {
           maxOrders: w.maxOrders ?? null,
           orderCutoffMinutes: w.orderCutoffMinutes ?? null,
+          weekdays: w.weekdays,
+          preparationBufferMinutes: w.preparationBufferMinutes,
+          travelBufferMinutes: w.travelBufferMinutes,
           isActive: w.isActive,
         },
       });
@@ -589,6 +728,9 @@ async function syncWindows(
           timeSlotId: w.timeSlotId,
           maxOrders: w.maxOrders ?? null,
           orderCutoffMinutes: w.orderCutoffMinutes ?? null,
+          weekdays: w.weekdays,
+          preparationBufferMinutes: w.preparationBufferMinutes,
+          travelBufferMinutes: w.travelBufferMinutes,
           isActive: w.isActive,
         },
       });

@@ -11,6 +11,7 @@ export const notificationEvents = [
   'delivery.delivered',
   'delivery.failed',
   'delivery.late',
+  'checkpoint.changed',
   'subscription.renewal',
   'subscription.paused',
   'payment.failed',

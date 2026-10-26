@@ -66,7 +66,7 @@ export async function enqueueNotifications(
     if (!pref) continue;
     const template = renderTemplate(event.event, event.data ?? {});
     const variables = Object.fromEntries(
-      ['orderNumber', 'beneficiary', 'checkpoint', 'meal', 'endDate'].flatMap(
+      ['orderNumber', 'beneficiary', 'checkpoint', 'meal', 'endDate', 'reason'].flatMap(
         (key) => {
           const value = event.data?.[key as keyof TemplateData];
           return typeof value === 'string' ? [[key, value]] : [];

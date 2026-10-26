@@ -76,10 +76,15 @@ export function CheckpointForm({
         if (f.get(`window.${slot.id}.enabled`) !== 'on') return [];
         const maxOrders = f.get(`window.${slot.id}.maxOrders`);
         const orderCutoffMinutes = f.get(`window.${slot.id}.orderCutoffMinutes`);
+        const preparationBufferMinutes = f.get(`window.${slot.id}.preparationBufferMinutes`);
+        const travelBufferMinutes = f.get(`window.${slot.id}.travelBufferMinutes`);
         return [{
           timeSlotId: slot.id,
           maxOrders: maxOrders ? Number(maxOrders) : null,
           orderCutoffMinutes: orderCutoffMinutes ? Number(orderCutoffMinutes) : null,
+          weekdays: [1, 2, 3, 4, 5, 6, 7].filter(day => f.get(`window.${slot.id}.weekday.${day}`) === 'on'),
+          preparationBufferMinutes: preparationBufferMinutes ? Number(preparationBufferMinutes) : 0,
+          travelBufferMinutes: travelBufferMinutes ? Number(travelBufferMinutes) : 0,
           isActive: true,
         }];
       }),
@@ -332,6 +337,22 @@ export function CheckpointForm({
                     defaultValue={window?.orderCutoffMinutes?.toString() ?? ''}
                     placeholder="Use time slot default"
                   />
+                  <TextField label="Preparation buffer (minutes)" name={`window.${slot.id}.preparationBufferMinutes`}
+                    type="number" min="0" max="1440" defaultValue={window?.preparationBufferMinutes?.toString() ?? '0'} />
+                  <TextField label="Travel buffer (minutes)" name={`window.${slot.id}.travelBufferMinutes`}
+                    type="number" min="0" max="1440" defaultValue={window?.travelBufferMinutes?.toString() ?? '0'} />
+                  <fieldset className="sm:col-span-3">
+                    <legend className="mb-2 text-sm font-medium">Recurring days</legend>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day, index) => (
+                        <label key={day} className="inline-flex items-center gap-2 text-sm">
+                          <input type="checkbox" name={`window.${slot.id}.weekday.${index + 1}`} value="on"
+                            defaultChecked={window?.weekdays?.includes(index + 1) ?? true} />
+                          {day}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
                 </div>
               );
             })}

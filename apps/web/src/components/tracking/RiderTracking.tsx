@@ -74,8 +74,20 @@ export function RiderSharingProvider({ children }: { children: React.ReactNode }
         }
       } catch (e) {
         if (disposed || active.current !== session) return;
-        if (e instanceof ApiError && [401, 403, 404, 409].includes(e.status)) {
-          stop(); setMessage('Sharing paused because the session expired or the route changed. Tap Share location to resume if this route is still active.');
+        if (e instanceof ApiError && e.status === 409) {
+          try {
+            const renewed = await apiClient.post<{ sessionId: string }>(`/v1/tracking/routes/${session.routeId}/sharing`, {});
+            if (disposed || active.current !== session) return;
+            active.current = { routeId: session.routeId, sessionId: renewed.sessionId };
+            setMessage('Connection restored. Sharing session renewed; waiting for a fresh GPS reading.');
+          } catch (renewError) {
+            if (disposed || active.current !== session) return;
+            if (renewError instanceof ApiError && [401, 403, 404, 409].includes(renewError.status)) {
+              stop(); setMessage('Sharing stopped because the route is no longer available.');
+            } else setMessage('Connection restored. Retrying the sharing session; no location is queued offline.');
+          }
+        } else if (e instanceof ApiError && [401, 403, 404].includes(e.status)) {
+          stop(); setMessage('Sharing stopped because your access or route changed.');
         } else if (typeof e === 'object' && e && 'code' in e && e.code === 1) {
           stop(); setMessage('Location permission was denied. Enable it in browser settings before sharing.');
         } else setMessage('Waiting for a fresh GPS reading or connection. No locations are queued while offline.');

@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/session';
 import { CheckpointCard } from '@/components/checkpoints/CheckpointCard';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/States';
+import { CheckpointOperationsDashboard, type CheckpointOperationsData } from '@/components/checkpoints/CheckpointOperationsDashboard';
 
 export const metadata: Metadata = { title: 'Checkpoints · Admin' };
 
@@ -29,9 +30,10 @@ export default async function AdminCheckpointsPage({
   if (filters.page) params.set('page', filters.page);
   params.set('pageSize', '30');
 
-  const { data: checkpoints, meta } = await apiServer.getWithMeta<CheckpointSummary[], CheckpointListResponse['meta']>(
-    `/checkpoints?${params}`
-  );
+  const [{ data: checkpoints, meta }, operations] = await Promise.all([
+    apiServer.getWithMeta<CheckpointSummary[], CheckpointListResponse['meta']>(`/checkpoints?${params}`),
+    apiServer.get<CheckpointOperationsData>('/checkpoints/operations').catch(() => null),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -47,6 +49,8 @@ export default async function AdminCheckpointsPage({
           <Button>Add checkpoint</Button>
         </Link>
       </div>
+
+      {operations && <CheckpointOperationsDashboard data={operations} />}
 
       {/* Filters */}
       <form method="GET" className="flex flex-wrap gap-3">

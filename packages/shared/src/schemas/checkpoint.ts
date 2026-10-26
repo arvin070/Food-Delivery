@@ -34,9 +34,21 @@ export const allowedWindowSchema = z.object({
   timeSlotId: idSchema,
   maxOrders: z.number().int().min(1).max(10_000).nullish(),
   orderCutoffMinutes: z.number().int().min(0).max(1440).nullish(),
+  weekdays: z.array(z.number().int().min(1).max(7)).min(1).max(7).default([1, 2, 3, 4, 5, 6, 7]).refine((days) => new Set(days).size === days.length, 'Duplicate weekday'),
+  preparationBufferMinutes: z.number().int().min(0).max(1440).default(0),
+  travelBufferMinutes: z.number().int().min(0).max(1440).default(0),
   isActive: z.boolean().default(true),
 });
 export type AllowedWindowInput = z.infer<typeof allowedWindowSchema>;
+
+export const checkpointScheduleExceptionSchema = z.object({
+  startDate: z.string().date(),
+  endDate: z.string().date(),
+  timeSlotId: idSchema.nullish(),
+  replacementCheckpointId: idSchema.nullish(),
+  reason: z.string().trim().min(3).max(300),
+}).strict().refine((value) => value.endDate >= value.startDate, { message: 'End date must be on or after start date', path: ['endDate'] });
+export type CheckpointScheduleExceptionInput = z.infer<typeof checkpointScheduleExceptionSchema>;
 
 // ─── Create checkpoint ────────────────────────────────────────────────────────
 
@@ -139,7 +151,20 @@ export interface DeliveryWindow {
   mealPeriod: string;
   maxOrders: number | null;
   orderCutoffMinutes: number | null;
+  weekdays: number[];
+  preparationBufferMinutes: number;
+  travelBufferMinutes: number;
   isActive: boolean;
+}
+
+export interface CheckpointScheduleException {
+  id: string;
+  startDate: string;
+  endDate: string;
+  timeSlotId: string | null;
+  replacementCheckpointId: string | null;
+  replacementCheckpointName: string | null;
+  reason: string;
 }
 
 export interface CheckpointDetail {

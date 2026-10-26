@@ -1,0 +1,9 @@
+aws_region                  = "ap-south-1"
+environment                 = "production"
+vpc_id                      = "vpc-REPLACE"
+private_subnet_ids          = ["subnet-REPLACE-A", "subnet-REPLACE-B"]
+app_host_security_group_id  = "sg-REPLACE"
+instance_class              = "db.r6g.large"
+engine_version              = "16.REPLACE_WITH_APPROVED_MINOR"
+multi_az                    = true
+backup_retention_days       = 35

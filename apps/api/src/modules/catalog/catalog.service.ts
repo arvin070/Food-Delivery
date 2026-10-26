@@ -111,7 +111,7 @@ function isOrderable(serviceDate: Date, startMinute: number, cutoffMinutes: numb
   return Date.now() < slotInstant(serviceDate, startMinute, timezone).getTime() - cutoffMinutes * 60_000;
 }
 
-function toCatalogMeal(row: CatalogRow): CatalogMeal {
+function toCatalogMeal(row: CatalogRow, orderableOverride?: boolean): CatalogMeal {
   const { meal } = row;
   return {
     mealScheduleId: row.id,
@@ -137,7 +137,7 @@ function toCatalogMeal(row: CatalogRow): CatalogMeal {
       startMinute: row.timeSlot.startMinute,
     },
     remaining: Math.max(0, row.totalQuantity - row.reservedQuantity),
-    orderable: isOrderable(
+    orderable: orderableOverride ?? isOrderable(
       row.serviceDate,
       row.timeSlot.startMinute,
       row.timeSlot.orderCutoffMinutes,
@@ -217,20 +217,20 @@ function orderBy(sort: BrowseCatalogQuery['sort']): Prisma.MealScheduleOrderByWi
 export async function browse(
   query: BrowseCatalogQuery
 ): Promise<{ result: PaginatedResult<CatalogMeal>; facets: CatalogFacets }> {
+  let availableCheckpointSlots: DeliverySlotOption[] | null = null;
+  if (query.checkpointId) {
+    const date = query.serviceDate ?? todayUtc().toISOString().slice(0, 10);
+    availableCheckpointSlots = await availableDeliverySlots({ checkpointId: query.checkpointId, serviceDate: date });
+  }
   if (query.timeSlotId) {
     if (!query.checkpointId) {
       throw badRequest('Choose a checkpoint before selecting a delivery time', {
         checkpointId: ['Required when selecting a delivery window'],
       });
     }
-    const date = query.serviceDate ?? todayUtc().toISOString().slice(0, 10);
-    const slots = await availableDeliverySlots({
-      checkpointId: query.checkpointId,
-      serviceDate: date,
-    });
-    const selected = slots.find((slot) => slot.timeSlotId === query.timeSlotId);
+    const selected = availableCheckpointSlots?.find((slot) => slot.timeSlotId === query.timeSlotId);
     if (!selected) {
-      throw badRequest('This delivery window is not active for the selected checkpoint', {
+      throw badRequest('This delivery window is not currently available for the selected checkpoint', {
         timeSlotId: ['Choose an active delivery window for this checkpoint'],
       });
     }
@@ -244,6 +244,10 @@ export async function browse(
   }
 
   const where = visibleWhere(query);
+  if (availableCheckpointSlots) {
+      const availableIds = availableCheckpointSlots.filter(slot => slot.orderable).map(slot => slot.timeSlotId);
+    where.timeSlotId = query.timeSlotId ? query.timeSlotId : { in: availableIds };
+  }
   const { skip, take } = toSkipTake(query);
 
   const [rows, total] = await prisma.$transaction([
@@ -257,7 +261,7 @@ export async function browse(
     prisma.mealSchedule.count({ where }),
   ]);
 
-  const items = rows.map(toCatalogMeal).filter((item) => item.remaining > 0);
+  const items = rows.map(row => toCatalogMeal(row, availableCheckpointSlots ? true : undefined)).filter((item) => item.remaining > 0);
 
   return { result: buildPaginatedResult(items, total, query), facets: await facetsFor(query) };
 }
@@ -332,6 +336,10 @@ export async function getMealDetail(
   });
 
   if (!row) throw notFound('Meal');
+  const checkpointSlots = checkpointId
+    ? await availableDeliverySlots({ checkpointId, serviceDate: row.serviceDate.toISOString().slice(0, 10) })
+    : null;
+  const orderable = checkpointSlots ? checkpointSlots.some(slot => slot.timeSlotId === row.timeSlot.id && slot.orderable) : undefined;
 
   // The same dish may run in several slots that day; offer them as alternatives
   // rather than making the customer go back and search again.
@@ -351,6 +359,7 @@ export async function getMealDetail(
     },
     select: {
       id: true,
+      timeSlotId: true,
       price: true,
       totalQuantity: true,
       reservedQuantity: true,
@@ -360,11 +369,11 @@ export async function getMealDetail(
   });
 
   return {
-    ...toCatalogMeal(row),
+    ...toCatalogMeal(row, orderable),
     ingredients: row.meal.ingredients,
     components: row.meal.items,
     alsoAvailableIn: siblings
-      .filter((s) => s.totalQuantity - s.reservedQuantity > 0)
+      .filter((s) => s.totalQuantity - s.reservedQuantity > 0 && (!checkpointSlots || checkpointSlots.some(slot => slot.timeSlotId === s.timeSlotId && slot.orderable)))
       .map((s) => ({
         mealScheduleId: s.id,
         timeSlotLabel: s.timeSlot.label,
@@ -378,13 +387,13 @@ export async function availableDates(
   checkpointId: string | undefined,
   days = 14
 ): Promise<string[]> {
-  const checkpoint = checkpointId ? await prisma.checkpoint.findUnique({ where: { id: checkpointId }, select: { city: { select: { timezone: true } } } }) : null;
+  const checkpoint = checkpointId ? await prisma.checkpoint.findUnique({ where: { id: checkpointId }, select: { id: true, city: { select: { timezone: true } } } }) : null;
   const from = checkpoint ? cityToday(checkpoint.city.timezone) : todayUtc();
   const to = new Date(from);
   to.setUTCDate(to.getUTCDate() + days);
 
   const rows = await prisma.mealSchedule.groupBy({
-    by: ['serviceDate'],
+    by: ['serviceDate', 'timeSlotId'],
     where: {
       status: MealScheduleStatus.PUBLISHED,
       serviceDate: { gte: from, lte: to },
@@ -402,7 +411,13 @@ export async function availableDates(
     orderBy: { serviceDate: 'asc' },
   });
 
-  return rows.map((r) => r.serviceDate.toISOString().slice(0, 10));
+  const candidateDates = [...new Set(rows.map((row) => row.serviceDate.toISOString().slice(0, 10)))];
+  if (!checkpointId || !checkpoint) return candidateDates;
+  const datesWithSlots = await Promise.all(candidateDates.map(async serviceDate => ({
+    serviceDate,
+    available: (await availableDeliverySlots({ checkpointId, serviceDate })).length > 0,
+  })));
+  return datesWithSlots.filter(entry => entry.available).map(entry => entry.serviceDate);
 }
 
 /**
@@ -416,7 +431,7 @@ export async function availableDeliverySlots(
 
   const checkpoint = await prisma.checkpoint.findFirst({
     where: { id: query.checkpointId, OR: [{ institutionId: null }, { institution: { isActive: true } }], isActive: true },
-    select: { id: true, deliveryCapacity: true, city: { select: { timezone: true } } },
+    select: { id: true, cityId: true, deliveryCapacity: true, city: { select: { timezone: true } } },
   });
   if (!checkpoint) throw notFound('Checkpoint');
   if (serviceDate < cityToday(checkpoint.city.timezone)) {
@@ -424,6 +439,12 @@ export async function availableDeliverySlots(
       serviceDate: ['Choose today or a future date'],
     });
   }
+  const weekday = serviceDate.getUTCDay() === 0 ? 7 : serviceDate.getUTCDay();
+  const [holiday, exceptions] = await Promise.all([
+    prisma.serviceHoliday.findFirst({ where: { serviceDate, OR: [{ cityId: null }, { cityId: checkpoint.cityId }] }, select: { id: true } }),
+    prisma.checkpointScheduleException.findMany({ where: { checkpointId: checkpoint.id, startDate: { lte: serviceDate }, endDate: { gte: serviceDate } }, select: { timeSlotId: true } }),
+  ]);
+  if (holiday) return [];
 
 
   const windows = await prisma.checkpointTimeSlot.findMany({
@@ -436,6 +457,9 @@ export async function availableDeliverySlots(
       timeSlotId: true,
       maxOrders: true,
       orderCutoffMinutes: true,
+      weekdays: true,
+      preparationBufferMinutes: true,
+      travelBufferMinutes: true,
       timeSlot: {
         select: {
           label: true,
@@ -490,13 +514,14 @@ export async function availableDeliverySlots(
     kitchensBySlot.set(schedule.timeSlotId, kitchens);
   }
 
-  return windows.map((window) => {
+  const exceptionSlots = new Set(exceptions.map(exception => exception.timeSlotId));
+  return windows.filter(window => window.weekdays.includes(weekday) && !exceptionSlots.has(null) && !exceptionSlots.has(window.timeSlotId)).map((window) => {
     const limits = [window.maxOrders, checkpoint.deliveryCapacity].filter(
       (limit): limit is number => limit !== null
     );
     const maxOrders = limits.length ? Math.min(...limits) : null;
     const bookedOrders = bookedBySlot.get(window.timeSlotId) ?? 0;
-    const cutoffMinutes = window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes;
+    const cutoffMinutes = (window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes) + window.preparationBufferMinutes + window.travelBufferMinutes;
     const remainingOrders = maxOrders === null ? null : Math.max(0, maxOrders - bookedOrders);
     return {
       timeSlotId: window.timeSlotId,
@@ -507,7 +532,7 @@ export async function availableDeliverySlots(
       maxOrders,
       bookedOrders,
       remainingOrders,
-      orderable:
+      orderable: (kitchensBySlot.get(window.timeSlotId)?.size ?? 0) > 0 &&
         isOrderable(serviceDate, window.timeSlot.startMinute, cutoffMinutes, checkpoint.city.timezone) &&
         remainingOrders !== 0,
       kitchens: [...(kitchensBySlot.get(window.timeSlotId)?.values() ?? [])],
@@ -538,13 +563,16 @@ export async function assertDeliverySlotCapacity(
   }
 
   const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id FROM checkpoints WHERE id = ${input.checkpointId} FOR UPDATE
+  `;
+  const windowRows = await tx.$queryRaw<{ id: string }[]>`
     SELECT id FROM "checkpoint_time_slots"
     WHERE "checkpointId" = ${input.checkpointId}
       AND "timeSlotId" = ${input.timeSlotId}
       AND "isActive" = true
     FOR UPDATE
   `;
-  if (rows.length === 0) {
+  if (windowRows.length === 0) {
     throw badRequest('This delivery window is not available at the checkpoint', {
       timeSlotId: ['Choose an active delivery window for this checkpoint'],
     });
@@ -553,13 +581,16 @@ export async function assertDeliverySlotCapacity(
   const [checkpoint, window] = await Promise.all([
     tx.checkpoint.findFirst({
       where: { id: input.checkpointId, OR: [{ institutionId: null }, { institution: { isActive: true } }], isActive: true },
-      select: { deliveryCapacity: true, city: { select: { timezone: true } } },
+      select: { cityId: true, deliveryCapacity: true, city: { select: { timezone: true } } },
     }),
     tx.checkpointTimeSlot.findFirst({
       where: { checkpointId: input.checkpointId, timeSlotId: input.timeSlotId, isActive: true },
       select: {
         maxOrders: true,
         orderCutoffMinutes: true,
+        weekdays: true,
+        preparationBufferMinutes: true,
+        travelBufferMinutes: true,
         timeSlot: {
           select: { isActive: true, startMinute: true, orderCutoffMinutes: true },
         },
@@ -569,12 +600,19 @@ export async function assertDeliverySlotCapacity(
   if (!checkpoint || !window?.timeSlot.isActive) {
     throw badRequest('Checkpoint or delivery window is inactive');
   }
+  const weekday = serviceDate.getUTCDay() === 0 ? 7 : serviceDate.getUTCDay();
+  if (!window.weekdays.includes(weekday)) throw badRequest('This checkpoint is not scheduled on the selected day');
+  const [holiday, exception] = await Promise.all([
+    tx.serviceHoliday.findFirst({ where: { serviceDate, OR: [{ cityId: null }, { cityId: checkpoint.cityId }] }, select: { id: true } }),
+    tx.checkpointScheduleException.findFirst({ where: { checkpointId: input.checkpointId, startDate: { lte: serviceDate }, endDate: { gte: serviceDate }, OR: [{ timeSlotId: null }, { timeSlotId: input.timeSlotId }] }, select: { id: true } }),
+  ]);
+  if (holiday || exception) throw badRequest('This checkpoint window is unavailable on the selected date');
   if (serviceDate < cityToday(checkpoint.city.timezone)) {
     throw badRequest('Delivery date cannot be in the past', {
       serviceDate: ['Choose today or a future date'],
     });
   }
-  const cutoff = window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes;
+  const cutoff = (window.orderCutoffMinutes ?? window.timeSlot.orderCutoffMinutes) + window.preparationBufferMinutes + window.travelBufferMinutes;
   if (!isOrderable(serviceDate, window.timeSlot.startMinute, cutoff, checkpoint.city.timezone)) {
     throw conflict('The ordering cutoff for this delivery window has passed');
   }

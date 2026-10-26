@@ -5,6 +5,7 @@ export type TemplateData = {
   checkpoint?: string;
   meal?: string;
   endDate?: string;
+  reason?: string;
 };
 export const TEMPLATE_VERSION = 1;
 export function renderTemplate(event: NotificationEvent, data: TemplateData) {
@@ -60,6 +61,10 @@ export function renderTemplate(event: NotificationEvent, data: TemplateData) {
       'delivery.late': {
         title: 'Meal delivery delayed',
         body: `${subject} has not been delivered within the scheduled window at ${location}. Open tracking for the latest verified status.`,
+      },
+      'checkpoint.changed': {
+        title: 'Checkpoint schedule changed',
+        body: data.reason ? `${subject}: ${data.reason}` : `${subject} is now scheduled at ${location}. Open your order for the updated delivery details.`,
       },
       'delivery.failed': {
         title: 'Delivery unsuccessful',

@@ -55,8 +55,12 @@ async function proxy(req: NextRequest, path: string[]): Promise<NextResponse> {
     if (!STRIPPED_REQUEST_HEADERS.has(key.toLowerCase()))
       headers.set(key, value);
   });
-  // Let the API log the real client address rather than the Next.js server's.
-  // Client-supplied forwarding headers are not an authenticated IP source.
+  // Caddy overwrites these values at the only public ingress. The API is not
+  // host-published and trusts exactly this Next.js proxy hop.
+  const clientIp = req.headers.get('x-forwarded-for');
+  const forwardedProto = req.headers.get('x-forwarded-proto');
+  if (clientIp) headers.set('x-forwarded-for', clientIp);
+  if (forwardedProto) headers.set('x-forwarded-proto', forwardedProto);
 
   const hasBody = !["GET", "HEAD"].includes(req.method);
 

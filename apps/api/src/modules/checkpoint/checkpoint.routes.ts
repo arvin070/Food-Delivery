@@ -18,6 +18,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   checkpointIdParamSchema,
+  checkpointScheduleExceptionSchema,
   createCheckpointSchema,
   idSchema,
   listCheckpointsQuerySchema,
@@ -44,6 +45,15 @@ checkpointRouter.get(
     const { role, userId } = requireAuth(req);
     const result = await checkpointService.listCheckpoints(req.query as never, role, userId);
     return paginated(res, result);
+  })
+);
+
+checkpointRouter.get(
+  '/operations',
+  authorize(UserRole.SUPER_ADMIN, UserRole.INSTITUTION_ADMIN),
+  asyncHandler(async (req, res) => {
+    const { role, userId } = requireAuth(req);
+    return ok(res, await checkpointService.operationsDashboard(role, userId));
   })
 );
 
@@ -88,6 +98,17 @@ checkpointRouter.patch(
       userId
     );
     return ok(res, { checkpoint });
+  })
+);
+
+checkpointRouter.post(
+  '/:checkpointId/exceptions',
+  authorize(UserRole.SUPER_ADMIN, UserRole.INSTITUTION_ADMIN),
+  validateParams(checkpointIdParamSchema),
+  validateBody(checkpointScheduleExceptionSchema),
+  asyncHandler(async (req, res) => {
+    const { role, userId } = requireAuth(req);
+    return created(res, await checkpointService.createScheduleException(req.params['checkpointId'] as string, req.body, role, userId));
   })
 );
 

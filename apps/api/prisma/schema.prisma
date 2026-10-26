@@ -572,6 +572,8 @@ model Checkpoint {
   institution     Institution?         @relation(fields: [institutionId], references: [id], onDelete: SetNull)
   address         Address?             @relation(fields: [addressId], references: [id], onDelete: SetNull)
   timeSlots       CheckpointTimeSlot[]
+  scheduleExceptions CheckpointScheduleException[] @relation("CheckpointScheduleExceptionCheckpoint")
+  replacementForExceptions CheckpointScheduleException[] @relation("CheckpointScheduleExceptionReplacement")
   servingKitchens KitchenServiceArea[]
   cartItems       CartItem[]
   orderItems      OrderItem[]
@@ -609,6 +611,7 @@ model TimeSlot {
 
   city          City?                @relation(fields: [cityId], references: [id], onDelete: Cascade)
   checkpoints   CheckpointTimeSlot[]
+  scheduleExceptions CheckpointScheduleException[]
   mealSchedules MealSchedule[]
   cartItems     CartItem[]
   orderItems    OrderItem[]
@@ -633,6 +636,10 @@ model CheckpointTimeSlot {
   maxOrders Int?
   /// Overrides TimeSlot.orderCutoffMinutes when set.
   orderCutoffMinutes Int?
+  /// ISO weekday values, Monday=1 through Sunday=7.
+  weekdays Int[] @default([1, 2, 3, 4, 5, 6, 7])
+  preparationBufferMinutes Int @default(0)
+  travelBufferMinutes Int @default(0)
   isActive  Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -643,6 +650,27 @@ model CheckpointTimeSlot {
 
   @@unique([checkpointId, timeSlotId])
   @@map("checkpoint_time_slots")
+}
+
+model CheckpointScheduleException {
+  id String @id @default(cuid())
+  checkpointId String
+  timeSlotId String?
+  replacementCheckpointId String?
+  startDate DateTime @db.Date
+  endDate DateTime @db.Date
+  reason String
+  createdByUserId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checkpoint Checkpoint @relation("CheckpointScheduleExceptionCheckpoint", fields: [checkpointId], references: [id], onDelete: Cascade)
+  replacementCheckpoint Checkpoint? @relation("CheckpointScheduleExceptionReplacement", fields: [replacementCheckpointId], references: [id], onDelete: Restrict)
+  timeSlot TimeSlot? @relation(fields: [timeSlotId], references: [id], onDelete: SetNull)
+
+  @@index([checkpointId, startDate, endDate], map: "checkpoint_schedule_exceptions_checkpoint_dates_idx")
+  @@index([replacementCheckpointId])
+  @@map("checkpoint_schedule_exceptions")
 }
 
 // ─── Vendors & kitchens ──────────────────────────────────────────────────────

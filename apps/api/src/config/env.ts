@@ -38,6 +38,7 @@ const envSchema = z.object({
 
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  SENTRY_DSN: z.string().url().optional(),
 
   DELIVERY_OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(720).default(30),
   DELIVERY_OTP_SECRET: z.string().min(32).optional(),
@@ -79,6 +80,10 @@ export const isDevelopment = env.NODE_ENV === 'development';
 /** Fail closed: simulation can never settle money in production. */
 if (isProduction && env.PAYMENT_PROVIDER === 'mock') {
   console.error('Production requires a real payment provider.');
+  process.exit(1);
+}
+if (isProduction && (!env.API_PUBLIC_URL.startsWith('https://') || env.CORS_ORIGINS.some(origin => !origin.startsWith('https://')))) {
+  console.error('Production API_PUBLIC_URL and every CORS_ORIGINS entry must use HTTPS.');
   process.exit(1);
 }
 if (env.PAYMENT_PROVIDER === 'razorpay' &&

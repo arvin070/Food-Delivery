@@ -7,6 +7,10 @@ coverage/
 .env
 .env.*
 !.env.example
+deploy/release.env
+deploy/previous-images.env
+deploy/previous-images.env.next
+deploy/release.env.failed
 .pgdata/
 .DS_Store
 *.tsbuildinfo

@@ -1,0 +1,104 @@
+name: Build and deploy Lunch
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment environment
+        type: choice
+        required: true
+        options: [staging, production]
+      action:
+        description: Deploy the selected commit or roll back to the recorded app images
+        type: choice
+        required: true
+        default: deploy
+        options: [deploy, rollback]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || inputs.action == 'deploy'
+    runs-on: ubuntu-latest
+    outputs:
+      api-image: ${{ steps.names.outputs.api-image }}
+      web-image: ${{ steps.names.outputs.web-image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute image references
+        id: names
+        shell: bash
+        run: |
+          namespace="${GITHUB_REPOSITORY,,}"
+          echo "api-image=ghcr.io/${namespace}-api:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "web-image=ghcr.io/${namespace}-web:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        run: echo "$GITHUB_TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish API image
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            docker buildx build --load --file apps/api/Dockerfile --tag "${{ steps.names.outputs.api-image }}" .
+          else
+            docker buildx build --push --file apps/api/Dockerfile --tag "${{ steps.names.outputs.api-image }}" .
+          fi
+      - name: Build and publish frontend image
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            docker buildx build --load --file apps/web/Dockerfile --tag "${{ steps.names.outputs.web-image }}" .
+          else
+            docker buildx build --push --file apps/web/Dockerfile --tag "${{ steps.names.outputs.web-image }}" .
+          fi
+
+  deploy:
+    needs: [build]
+    if: always() && ((github.event_name == 'push' && needs.build.result == 'success') || (github.event_name == 'workflow_dispatch' && (inputs.action == 'rollback' || needs.build.result == 'success')))
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'push' && 'staging' || inputs.target }}
+    env:
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DOMAIN: ${{ vars.DOMAIN }}
+      ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+      DEPLOY_ACTION: ${{ github.event_name == 'workflow_dispatch' && inputs.action || 'deploy' }}
+      DEPLOY_ENV: ${{ github.event_name == 'push' && 'staging' || inputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Publish deployment files
+        run: rsync -az deploy/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/"
+      - name: Deploy or roll back
+        shell: bash
+        env:
+          API_IMAGE_NEW: ${{ needs.build.outputs.api-image }}
+          WEB_IMAGE_NEW: ${{ needs.build.outputs.web-image }}
+        run: |
+          if [[ "$DEPLOY_ACTION" == deploy ]]; then
+            ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && API_IMAGE='$API_IMAGE_NEW' WEB_IMAGE='$WEB_IMAGE_NEW' DOMAIN='$DOMAIN' ACME_EMAIL='$ACME_EMAIL' LUNCH_ENV_FILE='/etc/lunch/$DEPLOY_ENV.env' WEB_ENV_FILE='/etc/lunch/web-$DEPLOY_ENV.env' MIGRATION_ENV_FILE='/etc/lunch/migration-$DEPLOY_ENV.env' sh deploy/deploy.sh deploy"
+          else
+            ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && LUNCH_ENV_FILE='/etc/lunch/$DEPLOY_ENV.env' WEB_ENV_FILE='/etc/lunch/web-$DEPLOY_ENV.env' sh deploy/deploy.sh rollback"
+          fi

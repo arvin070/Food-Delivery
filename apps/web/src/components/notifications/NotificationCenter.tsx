@@ -21,6 +21,7 @@ const labels: Record<NotificationEvent, string> = {
   'delivery.arriving': 'Delivery arriving',
   'delivery.delivered': 'Delivered',
   'delivery.late': 'Delivery delayed',
+  'checkpoint.changed': 'Checkpoint schedule changed',
   'delivery.failed': 'Failed delivery',
   'subscription.renewal': 'Subscription renewal reminder',
   'subscription.paused': 'Subscription paused',
