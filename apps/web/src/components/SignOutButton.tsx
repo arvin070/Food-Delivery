@@ -8,22 +8,25 @@ import { Button } from '@/components/ui/Button';
 export function SignOutButton() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   async function signOut() {
     setBusy(true);
+    setError('');
     try {
-      await apiClient.post('/v1/auth/logout');
+      await apiClient.post('/v1/auth/logout', {});
     } catch {
-      // Sign-out is best-effort: the cookies are cleared either way, so send
-      // the user to the sign-in screen rather than trapping them here.
+      setError('Sign out failed. Your session is still active. Please retry.');
+      setBusy(false);
+      return;
     }
     router.refresh();
     router.replace('/login');
   }
 
   return (
-    <Button variant="ghost" size="sm" loading={busy} onClick={signOut}>
+    <div><Button variant="ghost" size="sm" loading={busy} onClick={signOut}>
       Sign out
-    </Button>
+    </Button>{error && <p role="alert" className="text-xs text-red-700">{error}</p>}</div>
   );
 }

@@ -33,9 +33,9 @@ authRouter.post(
   asyncHandler(controller.loginHandler)
 );
 
-authRouter.post('/refresh', validateBody(refreshSchema), asyncHandler(controller.refreshHandler));
+authRouter.post('/refresh', authLimiter, validateBody(refreshSchema), asyncHandler(controller.refreshHandler));
 
-authRouter.post('/logout', asyncHandler(controller.logoutHandler));
+authRouter.post('/logout', validateBody(refreshSchema), asyncHandler(controller.logoutHandler));
 
 /**
  * Password reset. Rate limited harder than login: these endpoints send

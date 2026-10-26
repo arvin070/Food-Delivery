@@ -205,3 +205,17 @@ tests; all workspaces typecheck and build.
 Next: customer profile and child management, then the meal catalog
 (browse → date → checkpoint → slot), cart, checkout and payment, then the
 vendor, delivery-partner and admin surfaces.
+
+
+## Full-system integration
+
+[Module 21](docs/module-21-integration.md) records the integrated lifecycle,
+verification evidence, migration checks and remaining external-provider blockers.
+Use `npm run test:integration` for the focused database-backed gate and
+`npm run test:browser` for the four-persona delivery journey, navigation and browser
+security checks. Build first; browser tests start dedicated API/web servers and
+use mocked payment providers. Run database-writing suites sequentially.
+
+`npm run db:verify` checks the migration chain in a disposable local database.
+`npm run db:reconcile-order-status` provides bounded, audited repair of historical
+order roll-ups (dry-run by default); see Module 21 before applying it elsewhere.

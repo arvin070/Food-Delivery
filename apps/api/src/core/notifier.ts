@@ -47,7 +47,7 @@ export class ConsoleNotifier implements Notifier {
  * Placeholder for a real provider.
  *
  * Kept so the production path is explicit rather than implied: deploying with
- * no transport configured fails at boot, not at the first password reset.
+ * no transport configured fails when sending; deployments must wire a real transport.
  */
 export class UnconfiguredNotifier implements Notifier {
   readonly name = 'unconfigured';

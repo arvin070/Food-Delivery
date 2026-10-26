@@ -23,7 +23,7 @@ import type {
   ListCheckpointsQuery,
   UpdateCheckpointInput,
 } from '@lunch/shared';
-import { badRequest, forbidden, notFound } from '../../core/errors';
+import { badRequest, conflict, forbidden, notFound } from '../../core/errors';
 import { buildPaginatedResult, toSkipTake } from '../../core/http';
 import { logger } from '../../core/logger';
 import { prisma } from '../../core/prisma';
@@ -37,7 +37,7 @@ const checkpointSummarySelect = {
   type: true,
   isActive: true,
   city: { select: { id: true, name: true, state: true } },
-  institution: { select: { id: true, name: true } },
+  institution: { select: { id: true, name: true, isActive: true } },
   address: { select: { line1: true, area: true, cityName: true, postalCode: true } },
 } satisfies Prisma.CheckpointSelect;
 
@@ -55,7 +55,7 @@ const checkpointDetailSelect = {
   updatedAt: true,
   city: { select: { id: true, name: true, state: true } },
   zone: { select: { id: true, name: true } },
-  institution: { select: { id: true, name: true } },
+  institution: { select: { id: true, name: true, isActive: true } },
   address: {
     select: {
       id: true,
@@ -163,6 +163,7 @@ async function assertInstitutionAdmin(userId: string, institutionId: string): Pr
       institutionId,
       role: 'ADMIN',
       isActive: true,
+      institution: { isActive: true },
     },
     select: { id: true },
   });
@@ -177,7 +178,7 @@ async function assertInstitutionAdmin(userId: string, institutionId: string): Pr
  */
 async function adminInstitutionIds(userId: string): Promise<string[]> {
   const memberships = await prisma.institutionMember.findMany({
-    where: { userId, role: 'ADMIN', isActive: true },
+    where: { userId, role: 'ADMIN', isActive: true, institution: { isActive: true } },
     select: { institutionId: true },
   });
   return memberships.map((m) => m.institutionId);
@@ -203,6 +204,7 @@ export async function listCheckpoints(
   // Non-admins only see active checkpoints; checkpoint admins may manage both.
   if (callerRole !== 'SUPER_ADMIN' && callerRole !== 'INSTITUTION_ADMIN') {
     where.isActive = true;
+    where.AND = [{OR: [{ institutionId: null }, { institution: { isActive: true } }]}];
   } else if (isActive !== undefined) {
     where.isActive = isActive;
   }
@@ -278,12 +280,13 @@ export async function getCheckpoint(
   });
 
   if (!row) throw notFound('Checkpoint');
-  if (!row.isActive) {
-    if (callerRole === 'INSTITUTION_ADMIN' && row.institution) {
-      await assertInstitutionAdmin(callerUserId, row.institution.id);
-    } else if (callerRole !== 'SUPER_ADMIN') {
-      throw notFound('Checkpoint');
-    }
+  if (row.institution && !row.institution.isActive && callerRole !== 'SUPER_ADMIN') throw notFound('Checkpoint');
+  if (!row.isActive && callerRole !== 'SUPER_ADMIN') {
+    // Inactive checkpoints are private: reads must not reveal their existence
+    // through the write guard's 403 response.
+    const canRead = callerRole === 'INSTITUTION_ADMIN' && row.institution &&
+      (await adminInstitutionIds(callerUserId)).includes(row.institution.id);
+    if (!canRead) throw notFound('Checkpoint');
   }
 
   return toDetail(row);
@@ -326,7 +329,7 @@ export async function createCheckpoint(
   // Validate institution exists if provided.
   if (input.institutionId) {
     const inst = await prisma.institution.findFirst({
-      where: { id: input.institutionId, isActive: true },
+      where: { id: input.institutionId, isActive: true, cityId: input.cityId },
       select: { id: true },
     });
     if (!inst)
@@ -339,7 +342,7 @@ export async function createCheckpoint(
   if (input.windows && input.windows.length > 0) {
     const tsIds = input.windows.map((w) => w.timeSlotId);
     const found = await prisma.timeSlot.count({
-      where: { id: { in: tsIds }, isActive: true },
+      where: { id: { in: tsIds }, isActive: true, AND: [{OR:[{cityId:null},{cityId:input.cityId}]},{OR:[{institutionId:null},...(input.institutionId?[{institutionId:input.institutionId}]:[])]}] },
     });
     if (found !== tsIds.length) {
       throw badRequest('One or more delivery windows reference invalid time slots', {
@@ -375,7 +378,8 @@ export async function createCheckpoint(
       isActive: w.isActive,
     })) ?? [];
 
-  const row = await prisma.checkpoint.create({
+  const row = await prisma.$transaction(async tx => {
+  const created = await tx.checkpoint.create({
     data: {
       name: input.name,
       type: input.type,
@@ -396,6 +400,10 @@ export async function createCheckpoint(
     select: checkpointDetailSelect,
   });
 
+  await tx.auditLog.create({data:{actorUserId:callerUserId,action:'checkpoint.created',entityType:'Checkpoint',entityId:created.id,after:{name:created.name,institutionId:input.institutionId??null}}});
+  return created;
+  });
+
   logger.info({ checkpointId: row.id, callerUserId }, 'Checkpoint created');
   return toDetail(row);
 }
@@ -406,11 +414,17 @@ export async function updateCheckpoint(
   callerRole: string,
   callerUserId: string
 ): Promise<CheckpointDetail> {
-  const existing = await prisma.checkpoint.findUnique({
+  return prisma.$transaction(async tx => {
+  await tx.$queryRaw`SELECT id FROM checkpoints WHERE id=${checkpointId} FOR UPDATE`;
+  const existing = await tx.checkpoint.findUnique({
     where: { id: checkpointId },
     select: { id: true, institutionId: true, addressId: true, cityId: true, zoneId: true, latitude: true, longitude: true },
   });
   if (!existing) throw notFound('Checkpoint');
+  if (callerRole === 'INSTITUTION_ADMIN' && input.institutionId !== undefined && input.institutionId !== existing.institutionId) throw forbidden('Institution checkpoints cannot be transferred or detached');
+  const targetInstitutionId = input.institutionId !== undefined ? input.institutionId : existing.institutionId;
+  if (targetInstitutionId && !await tx.institution.count({ where: { id: targetInstitutionId, cityId: input.cityId ?? existing.cityId, isActive: true } })) throw badRequest('Institution must be active and in the checkpoint city');
+  if ((input.cityId && input.cityId !== existing.cityId || input.institutionId !== undefined && input.institutionId !== existing.institutionId) && await tx.orderItem.count({where:{checkpointId}})) throw conflict('A checkpoint with order history cannot be transferred');
 
   // Institution admins may only edit checkpoints under their institution.
   if (callerRole === 'INSTITUTION_ADMIN') {
@@ -423,7 +437,7 @@ export async function updateCheckpoint(
   }
 
   if (input.cityId) {
-    const city = await prisma.city.findFirst({
+    const city = await tx.city.findFirst({
       where: { id: input.cityId, isActive: true },
       select: { id: true },
     });
@@ -437,7 +451,7 @@ export async function updateCheckpoint(
   const targetCityId = input.cityId ?? existing.cityId;
   const targetZoneId = input.zoneId !== undefined ? input.zoneId : existing.zoneId;
   if (targetZoneId && (input.zoneId !== undefined || input.cityId !== undefined)) {
-    const zone = await prisma.zone.findFirst({
+    const zone = await tx.zone.findFirst({
       where: { id: targetZoneId, cityId: targetCityId },
       select: { id: true },
     });
@@ -492,16 +506,17 @@ export async function updateCheckpoint(
     };
   }
 
-  const row = await prisma.checkpoint.update({
+  const row = await tx.checkpoint.update({
     where: { id: checkpointId },
     data,
     select: checkpointDetailSelect,
   });
 
+  await tx.auditLog.create({data:{actorUserId:callerUserId,action:'checkpoint.updated',entityType:'Checkpoint',entityId:checkpointId,after:JSON.parse(JSON.stringify(input))}});
   // Handle window updates if provided.
   if (input.windows !== undefined) {
-    await syncWindows(checkpointId, input.windows);
-    const updated = await prisma.checkpoint.findUnique({
+    await syncWindows(checkpointId, input.windows, tx);
+    const updated = await tx.checkpoint.findUnique({
       where: { id: checkpointId },
       select: checkpointDetailSelect,
     });
@@ -511,6 +526,7 @@ export async function updateCheckpoint(
 
   logger.info({ checkpointId, callerUserId }, 'Checkpoint updated');
   return toDetail(row);
+  });
 }
 
 /**
@@ -522,19 +538,21 @@ export async function updateCheckpoint(
  */
 async function syncWindows(
   checkpointId: string,
-  windows: NonNullable<UpdateCheckpointInput['windows']>
+  windows: NonNullable<UpdateCheckpointInput['windows']>,
+  db: Prisma.TransactionClient
 ): Promise<void> {
+  const checkpoint=await db.checkpoint.findUniqueOrThrow({where:{id:checkpointId}});
   const slotIds = windows.map((window) => window.timeSlotId);
-  const activeSlotCount = await prisma.timeSlot.count({
-    where: { id: { in: slotIds }, isActive: true },
+  const activeSlotCount = await db.timeSlot.count({
+    where: { id: { in: slotIds }, isActive: true, AND: [{OR:[{cityId:null},{cityId:checkpoint.cityId}]},{OR:[{institutionId:null},...(checkpoint.institutionId?[{institutionId:checkpoint.institutionId}]:[])]}] },
   });
-  if (activeSlotCount !== new Set(slotIds).size) {
+  if (activeSlotCount !== slotIds.length) {
     throw badRequest('One or more delivery windows reference invalid time slots', {
       windows: ['Some time slots were not found or are duplicated'],
     });
   }
 
-  const existing = await prisma.checkpointTimeSlot.findMany({
+  const existing = await db.checkpointTimeSlot.findMany({
     where: { checkpointId },
     select: { id: true, timeSlotId: true },
   });
@@ -546,7 +564,7 @@ async function syncWindows(
     .filter((e) => !incomingSlotIds.has(e.timeSlotId))
     .map((e) => e.id);
   if (toDeactivate.length > 0) {
-    await prisma.checkpointTimeSlot.updateMany({
+    await db.checkpointTimeSlot.updateMany({
       where: { id: { in: toDeactivate } },
       data: { isActive: false },
     });
@@ -556,7 +574,7 @@ async function syncWindows(
   for (const w of windows) {
     const existingId = existingBySlot.get(w.timeSlotId);
     if (existingId) {
-      await prisma.checkpointTimeSlot.update({
+      await db.checkpointTimeSlot.update({
         where: { id: existingId },
         data: {
           maxOrders: w.maxOrders ?? null,
@@ -565,7 +583,7 @@ async function syncWindows(
         },
       });
     } else {
-      await prisma.checkpointTimeSlot.create({
+      await db.checkpointTimeSlot.create({
         data: {
           checkpointId,
           timeSlotId: w.timeSlotId,
@@ -601,7 +619,7 @@ export async function saveDefaultCheckpoint(
 ): Promise<void> {
   // Confirm the checkpoint is active.
   const checkpoint = await prisma.checkpoint.findFirst({
-    where: { id: checkpointId, isActive: true },
+    where: { id: checkpointId, isActive: true, OR: [{ institutionId: null }, { institution: { isActive: true } }] },
     select: { id: true },
   });
   if (!checkpoint) throw notFound('Checkpoint');

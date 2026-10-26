@@ -46,6 +46,7 @@ function fromPrisma(err: Prisma.PrismaClientKnownRequestError): AppError {
 }
 
 function normalise(err: unknown): AppError {
+  if(err && typeof err==='object' && 'status' in err && [413,415].includes(Number(err.status))) return new AppError(Number(err.status),ErrorCode.BAD_REQUEST,Number(err.status)===413?'Request body too large':'Unsupported content type');
   if (err instanceof AppError) return err;
 
   if (err instanceof ZodError) {

@@ -1,3 +1,4 @@
+import { paymentTransaction } from '../payments/transaction';
 /**
  * Vendor lifecycle, operated by SUPER_ADMIN.
  *
@@ -116,7 +117,7 @@ export async function getVendor(vendorId: string): Promise<VendorSummary> {
 export async function createVendor(
   actorUserId: string,
   input: CreateVendorInput,
-  context: { ip?: string; userAgent?: string } = {}
+  context: { ip?: string; userAgent?: string; expectedStatus?: string } = {}
 ): Promise<VendorSummary> {
   const owner = await prisma.user.findFirst({
     where: {
@@ -201,19 +202,15 @@ export async function updateVendorStatus(
   actorUserId: string,
   vendorId: string,
   input: UpdateVendorStatusInput,
-  context: { ip?: string; userAgent?: string } = {}
+  context: { ip?: string; userAgent?: string; expectedStatus?: string } = {}
 ): Promise<VendorSummary> {
-  const existing = await prisma.vendor.findFirst({
-    where: { id: vendorId, deletedAt: null },
-    select: { id: true, status: true, approvedAt: true },
-  });
-  if (!existing) throw notFound('Vendor');
-
-  if (existing.status === input.status) return getVendor(vendorId);
-
   const isLive = input.status === VendorStatus.APPROVED;
-
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await paymentTransaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(721501)::text`;
+    const existing=await tx.vendor.findFirst({where:{id:vendorId,deletedAt:null},select:{id:true,status:true,approvedAt:true}});
+    if(!existing) throw notFound('Vendor');
+    if(context.expectedStatus&&existing.status!==context.expectedStatus) throw conflict('Vendor changed. Refresh before updating.');
+    if(existing.status===input.status) return tx.vendor.findUniqueOrThrow({where:{id:vendorId},select:vendorSelect});
     const row = await tx.vendor.update({
       where: { id: vendorId },
       data: {
@@ -248,7 +245,7 @@ export async function updateVendorStatus(
   });
 
   logger.info(
-    { actorUserId, vendorId, from: existing.status, to: input.status },
+    { actorUserId, vendorId, to: input.status },
     'Vendor status changed'
   );
   return toVendorSummary(updated);

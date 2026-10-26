@@ -1,3 +1,7 @@
+import { startTrackingWorker } from './modules/tracking/tracking.worker';
+import { startNotificationWorker } from './modules/notifications/notification.worker';
+import { startPaymentWorker } from './modules/payments/payment.worker';
+import { startSubscriptionWorker } from './modules/subscriptions/subscription.worker';
 /**
  * Process entrypoint: binds the port and shuts down cleanly.
  */
@@ -9,6 +13,10 @@ import { connectDatabase, disconnectDatabase } from './core/prisma';
 async function main() {
   await connectDatabase();
 
+  const stopSubscriptions = startSubscriptionWorker();
+  const stopPayments = startPaymentWorker();
+  const stopNotifications = startNotificationWorker();
+  const stopTracking = startTrackingWorker();
   const app = createApp();
   const server = app.listen(env.API_PORT, env.API_HOST, () => {
     logger.info(
@@ -32,6 +40,10 @@ async function main() {
     server.close(async (err) => {
       if (err) logger.error({ err }, 'Error while closing HTTP server');
       try {
+        await stopSubscriptions();
+        await stopPayments();
+        await stopNotifications();
+        await stopTracking();
         await disconnectDatabase();
       } catch (dbErr) {
         logger.error({ err: dbErr }, 'Error while disconnecting the database');

@@ -4,7 +4,7 @@ import { validationError } from '../core/errors';
 
 /** Turns a ZodError into the `details` map the API contract specifies. */
 export function zodToDetails(error: ZodError): Record<string, string[]> {
-  const details: Record<string, string[]> = {};
+  const details: Record<string, string[]> = Object.create(null);
   for (const issue of error.issues) {
     const key = issue.path.length ? issue.path.join('.') : '_';
     (details[key] ??= []).push(issue.message);

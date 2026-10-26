@@ -31,11 +31,10 @@ export const deliveryIdParamSchema = z.object({ deliveryId: idSchema });
 export const assignDeliverySchema = z.object({ deliveryPartnerId: idSchema });
 
 export const updateDeliveryStatusSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal(DeliveryStatus.OUT_FOR_DELIVERY) }),
-  z.object({ status: z.literal(DeliveryStatus.AT_CHECKPOINT) }),
   z.object({
     status: z.literal(DeliveryStatus.DELIVERED),
     receiverName: z.string().trim().min(2).max(120),
+    otp: z.string().regex(/^\d{6}$/, 'Enter the 6-digit delivery code'),
   }),
   z.object({
     status: z.literal(DeliveryStatus.FAILED),
@@ -96,6 +95,7 @@ export interface CustomerOrderItem {
 }
 
 export interface CustomerOrder {
+  corporateFunding?: {companyAmount:string;employeeAmount:string;status:string};
   id: string;
   orderNumber: string;
   status: OrderStatus;

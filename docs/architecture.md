@@ -51,8 +51,9 @@ city's timezone, not timestamps.
 
 A 12:30 lunch slot is 12:30 *local*, on every date, across DST boundaries and in
 every city. Storing a timestamp would require recomputing it per date and per
-zone. Cutoffs are also minutes (`orderCutoffMinutes` before the slot starts), so
-"has ordering closed?" is integer comparison rather than date arithmetic.
+zone. Cutoffs are also minutes (`orderCutoffMinutes` before the slot starts).
+`slotInstant` converts the city-local start to a UTC instant before comparing it
+with the current time; treating local minutes as UTC would close ordering late.
 
 `serviceDate` is a Postgres `DATE`. A delivery happens on a calendar day, not at
 an instant.
@@ -93,8 +94,13 @@ a week of lunches for two children at two different schools is **one checkout**.
 
 The kitchen prepares, and the rider delivers, *one meal for one person on one
 date*. So `OrderItemStatus` is the real workflow and `OrderStatus` is a roll-up
-derived from it. Putting fulfilment status on `Order` would have made the common
-case — a multi-date, multi-child order — unrepresentable without a rewrite.
+derived from it. `orders/order-state.ts` is the single fulfilment roll-up. Every transition writes
+`OrderItem` and the persisted `Order.status` together while holding the order
+lock. Customer, admin, analytics and list filters read that same stored status;
+no read endpoint independently derives a different answer. Mixed terminal items
+become `PARTIALLY_FULFILLED`; a failed line does not prevent remaining funded
+lines from progressing. Checkout/payment states remain authoritative until
+verified capture or explicit corporate credit authorization.
 
 `OrderItem` also snapshots `mealNameSnapshot`, `unitPrice` and
 `beneficiaryName`, so a past order never changes when a vendor edits their menu
@@ -102,8 +108,8 @@ or a child record is removed.
 
 ## 7. Refresh-token rotation with leak detection
 
-Access tokens are 15-minute JWTs, so most requests authenticate without a
-database lookup for identity. Refresh tokens are opaque random strings; only
+Access tokens are 15-minute JWTs bound to a database session by `sid`. Every
+request verifies the current user and an unrevoked, unexpired session. Refresh tokens are opaque random strings; only
 their SHA-256 hash is stored, so a database leak cannot be replayed as a
 session.
 
@@ -119,8 +125,8 @@ chosen by humans.
 
 ### Why `authenticate` still hits the database
 
-The token is trusted for identity but `status` and `role` are re-read on every
-request. A suspended account must lose access immediately, not whenever its
+The signed subject identifies the user; `status`, `role`, and the token’s
+session are re-read on every request. A suspended account must lose access immediately, not whenever its
 15-minute token happens to expire. A role change takes effect at once for the
 same reason.
 
@@ -178,3 +184,65 @@ localised at any time.
    Use the shared components in `components/ui/States.tsx`.
 7. **Keep it runnable.** The application must start, typecheck, build and pass
    its tests at the end of every module.
+
+
+## Module 21: integrated runtime and ownership
+
+```mermaid
+flowchart LR
+  Browser[Next.js role interfaces] --> Proxy[Same-origin API proxy]
+  Mobile[Native client / bearer token] --> API[Express /api/v1]
+  Proxy --> API
+  API --> Auth[Session, role and owner checks]
+  Auth --> Domain[Domain services]
+  Domain --> DB[(PostgreSQL / Prisma)]
+  Domain --> Payments[Payment provider interface]
+  Payments --> Gateway[Mock or Razorpay]
+  Domain --> Outbox[Transactional notification outbox]
+  Outbox --> Worker[Leased notification worker]
+  Worker --> Providers[Channel adapters]
+  Jobs[Bounded subscription and payment jobs] --> Domain
+  AI[Independent intelligence services] --> DB
+```
+
+| Boundary | Contract |
+| --- | --- |
+| Catalog → cart → checkout | A published `MealSchedule` is the sellable unit. The server revalidates beneficiary ownership, checkpoint/window, stock, cutoff and capacities. Dates remain calendar dates; cutoffs convert the city-local window to an instant with `slotInstant`. |
+| Consumer / subscription / corporate → orders | These create the same Order/OrderItem records. Subscriptions generate a bounded horizon; corporate charges reserve approved credits without fabricating provider payments. |
+| Orders → payment → fulfilment | Consumer/co-paid orders await backend-verified capture. Fully funded corporate orders use a validated durable credit authorization. `assertOrderPaid` gates writes; its SQL equivalent admits the same funding states to kitchen lists. |
+| Kitchen → route → rider | Preparation changes the same items shown by customer/admin. Route creation assigns packed items and ordered checkpoint stops transactionally; only the assigned active rider may pick up, start, arrive, or complete them. |
+| OTP → confirmation | Customer-issued delivery codes are verified on the backend. Delivery state and notification enqueueing commit together. Retries cannot send a second logical delivery confirmation. |
+| Admin / institution / corporate | Central role guards plus service ownership scopes apply. Administrative state changes use revisions/expected status and audit records; institution/company membership is not inferred from a client-supplied ID. |
+| Reporting / intelligence | Scoped readers of persisted domain records. Recommendations do not mutate orders. Support retrieves verified records and does not infer payment or delivery success. |
+
+API responses retain `{data}` and paginated `{data, meta}` envelopes. Browser
+forms use the shared API client and error mapping; server pages use `getWithMeta`
+when they need pagination. Compatibility aliases `/orders/history` and
+`POST /orders` share the canonical handlers instead of duplicating logic.
+Vendor item APIs remain for existing clients; kitchen batch APIs provide scoped
+operational lists, audited batches and partial-batch outcomes.
+
+The API process starts bounded subscription generation, payment reconciliation,
+and notification dispatch workers and drains them at shutdown. These are not
+unlimited recurring order generators. External transport failures do not undo
+an accepted business transaction; durable records support reconciliation/retry.
+
+Browser checkout retains its request key in session storage scoped to the cart.
+A lost response can be recovered after reloading without creating a second order.
+Only the request key is stored there; authentication tokens remain HttpOnly.
+Operational pages reload authoritative data after mutations; refresh controls or
+page reload fetch changes made by another persona. This is not a realtime push
+subscription to every dashboard.
+
+Run `npm run db:verify` to replay migrations in a disposable local database and
+compare both fresh and current databases with Prisma. Run the integration gate
+with `npm run test:integration`; run the full suite and production build before
+`npm run test:browser`. Database-writing suites must run sequentially. See
+[Module 21 verification and blockers](module-21-integration.md) for exact evidence.
+
+
+Historical records can be checked/repaired with `npm run db:reconcile-order-status`
+(dry-run default; `-- --apply` to write). Each invocation handles at most 100
+records, locks and re-reads each order, preserves terminal financial states, and
+records an audit event for each correction. Continue with the returned cursor.
+This is explicit maintenance, not an unbounded worker or a read-time mutation.

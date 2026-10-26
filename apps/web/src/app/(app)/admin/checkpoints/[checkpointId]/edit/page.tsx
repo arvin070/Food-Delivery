@@ -11,12 +11,12 @@ export const metadata: Metadata = { title: 'Edit checkpoint · Admin' };
 interface ZoneRow { id: string; name: string; cityId: string }
 interface TimeSlotRow { id: string; label: string }
 
-async function loadCheckpointFormRef() {
+async function loadCheckpointFormRef(checkpoint: CheckpointDetail) {
   const [{ cities }, { institutions }, { zones }, { timeSlots }] = await Promise.all([
     apiServer.get<{ cities: RefOption[] }>('/reference/cities'),
     apiServer.get<{ institutions: RefOption[] }>('/reference/institutions'),
     apiServer.get<{ zones: ZoneRow[] }>('/reference/zones').catch(() => ({ zones: [] as ZoneRow[] })),
-    apiServer.get<{ timeSlots: TimeSlotRow[] }>('/reference/time-slots'),
+    apiServer.get<{ timeSlots: TimeSlotRow[] }>('/reference/time-slots?'+new URLSearchParams({cityId:checkpoint.city.id,...(checkpoint.institution?{institutionId:checkpoint.institution.id}:{})})),
   ]);
   return {
     cities,
@@ -34,15 +34,10 @@ export default async function EditCheckpointPage({
   await requireRole([UserRole.SUPER_ADMIN, UserRole.INSTITUTION_ADMIN], '/admin/checkpoints');
   const { checkpointId } = await params;
 
-  const [checkpointResult, reference] = await Promise.all([
-    apiServer
-      .get<{ checkpoint: CheckpointDetail }>(`/checkpoints/${checkpointId}`)
-      .catch(() => null),
-    loadCheckpointFormRef(),
-  ]);
-
+  const checkpointResult = await apiServer.get<{checkpoint:CheckpointDetail}>(`/checkpoints/${checkpointId}`).catch(()=>null);
   if (!checkpointResult) notFound();
   const { checkpoint } = checkpointResult;
+  const reference = await loadCheckpointFormRef(checkpoint);
 
   return (
     <div className="space-y-6">

@@ -53,8 +53,8 @@ export default async function VendorDashboardPage() {
           <p className="mt-1 text-sm text-slate-500">Today, {formatDate(today.date)}</p>
         </div>
         <div className="flex gap-2">
-          <Link href="/vendor/orders">
-            <Button>View order queue</Button>
+          <Link href="/kitchen">
+            <Button>Kitchen operations</Button>
           </Link>
         </div>
       </div>

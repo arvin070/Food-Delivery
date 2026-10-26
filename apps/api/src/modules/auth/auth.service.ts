@@ -1,3 +1,4 @@
+import { enqueueNotifications } from '../notifications/notification.service';
 /**
  * Authentication business logic.
  *
@@ -113,6 +114,7 @@ export async function register(
       },
       select: publicUserSelect,
     });
+    await enqueueNotifications(tx,[{userId:created.id,event:'account.created',key:'account:'+created.id}]);
     return created;
   });
 
@@ -150,10 +152,14 @@ export async function login(
     throw forbidden('Your account has been deactivated', ErrorCode.ACCOUNT_SUSPENDED);
   }
 
-  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-
   const principal = await buildPrincipal(user.id);
-  const tokens = await issueTokens(principal, context);
+  const tokens = await prisma.$transaction(async tx=>{
+    await tx.$queryRaw`SELECT id FROM users WHERE id=${user.id} FOR UPDATE`;
+    const current=await tx.user.findUniqueOrThrow({where:{id:user.id},select:{passwordHash:true,status:true,deletedAt:true}});
+    if(current.passwordHash!==user.passwordHash||current.status!=='ACTIVE'||current.deletedAt)throw unauthenticated('Credentials changed. Please sign in again.');
+    await tx.user.update({where:{id:user.id},data:{lastLoginAt:new Date()}});
+    return issueTokens(principal,context,tx);
+  });
 
   logger.info({ userId: user.id, role: user.role }, 'User signed in');
 
@@ -191,6 +197,9 @@ export async function changePassword(
 
   const passwordHash = await hashPassword(input.newPassword);
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} FOR UPDATE`;
+    const current=await tx.user.findUniqueOrThrow({where:{id:userId},select:{passwordHash:true}});
+    if(current.passwordHash!==user.passwordHash)throw unauthenticated('Credentials changed. Please sign in again.');
     await tx.user.update({ where: { id: userId }, data: { passwordHash } });
     await revokeAllUserTokens(userId, tx);
   });

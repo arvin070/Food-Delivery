@@ -6,7 +6,7 @@ const errorBody: ApiErrorBody = {
   error: { code: ErrorCode.RATE_LIMITED, message: 'Too many requests. Please try again shortly.' },
 };
 
-function makeLimiter(options: Partial<Options>) {
+export function makeLimiter(options: Partial<Options>) {
   return rateLimit({
     standardHeaders: 'draft-7',
     legacyHeaders: false,
@@ -25,3 +25,6 @@ export const authLimiter = makeLimiter({ windowMs: 15 * 60_000, limit: 20 });
 
 /** OTP issue/verify: tighter still. */
 export const otpLimiter = makeLimiter({ windowMs: 15 * 60_000, limit: 10 });
+
+/** Signed callbacks still need resource limits before parsing. */
+export const webhookLimiter = makeLimiter({windowMs:60000,limit:120});

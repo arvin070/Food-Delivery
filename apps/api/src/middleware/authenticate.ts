@@ -49,6 +49,8 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     if (user.status === UserStatus.DEACTIVATED) {
       return next(forbidden('Your account has been deactivated', ErrorCode.ACCOUNT_SUSPENDED));
     }
+    const session = await prisma.refreshToken.findFirst({where:{id:principal.sessionId,userId:principal.userId,revokedAt:null,expiresAt:{gt:new Date()}},select:{id:true}});
+    if(!session) return next(unauthenticated('Your session has been revoked'));
     // A role change since the token was issued takes effect at once.
     req.auth = { ...principal, role: user.role };
     next();

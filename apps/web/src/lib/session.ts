@@ -59,7 +59,7 @@ export async function requireRole(roles: readonly UserRole[], returnTo?: string)
 export function homePathForRole(role: UserRole): string {
   switch (role) {
     case 'VENDOR':
-      return '/vendor';
+      return '/kitchen';
     case 'DELIVERY_PARTNER':
       return '/delivery';
     case 'SUPER_ADMIN':

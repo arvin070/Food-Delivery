@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { dateOnlySchema, idSchema, paginationSchema } from '@lunch/shared';
+import { authenticate, requireAuth } from '../../middleware/authenticate';
+import { authorizeAdmin } from '../../middleware/authorize';
+import { validateBody, validateQuery } from '../../middleware/validate';
+import { asyncHandler, created, ok } from '../../core/http';
+import { prisma } from '../../core/prisma';
+import { addHoliday } from './subscription.service';
+export const holidayRouter = Router();
+holidayRouter.use(authenticate, authorizeAdmin());
+holidayRouter.get('/', validateQuery(paginationSchema), asyncHandler(async (req, res) => ok(res, await prisma.serviceHoliday.findMany({ orderBy: { serviceDate: 'desc' }, take: 20, skip: (Number(req.query.page) - 1) * 20 }))));
+holidayRouter.post('/', validateBody(z.object({ date: dateOnlySchema, cityId: idSchema.optional(), name: z.string().trim().min(1).max(120) })), asyncHandler(async (req, res) => created(res, await addHoliday(requireAuth(req).userId, req.body))));

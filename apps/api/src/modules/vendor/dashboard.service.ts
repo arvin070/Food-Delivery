@@ -29,10 +29,12 @@ function daysAgo(days: number): Date {
 
 /** Cancelled items are excluded from every revenue figure. */
 const EARNING_STATUSES: OrderItemStatus[] = [
-  OrderItemStatus.PENDING,
   OrderItemStatus.CONFIRMED,
   OrderItemStatus.PREPARING,
   OrderItemStatus.PACKED,
+  OrderItemStatus.ASSIGNED,
+  OrderItemStatus.PICKED_UP,
+  OrderItemStatus.AT_CHECKPOINT,
   OrderItemStatus.DISPATCHED,
   OrderItemStatus.OUT_FOR_DELIVERY,
   OrderItemStatus.DELIVERED,
@@ -132,7 +134,6 @@ export async function getDashboard(context: VendorContext): Promise<VendorDashbo
       totalOrders: totalToday,
       byStatus,
       toPrepare: countOf(
-        OrderItemStatus.PENDING,
         OrderItemStatus.CONFIRMED,
         OrderItemStatus.PREPARING
       ),

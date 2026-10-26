@@ -1,3 +1,4 @@
+import { paymentTransaction } from '../payments/transaction';
 /**
  * User administration.
  *
@@ -13,7 +14,7 @@ import {
   type PublicUser,
   type UpdateUserStatusInput,
 } from '@lunch/shared';
-import { badRequest, notFound } from '../../core/errors';
+import { badRequest, notFound, conflict, forbidden } from '../../core/errors';
 import { buildPaginatedResult, toSkipTake } from '../../core/http';
 import { logger } from '../../core/logger';
 import { prisma } from '../../core/prisma';
@@ -74,7 +75,7 @@ export async function updateUserStatus(
   actorUserId: string,
   targetUserId: string,
   input: UpdateUserStatusInput,
-  context: { ip?: string; userAgent?: string } = {}
+  context: { ip?: string; userAgent?: string; expectedStatus?: string } = {}
 ): Promise<PublicUser> {
   // An administrator locking themselves out is almost always a mistake, and
   // recovering needs database access.
@@ -82,21 +83,15 @@ export async function updateUserStatus(
     throw badRequest('You cannot suspend or deactivate your own account');
   }
 
-  const target = await prisma.user.findFirst({
-    where: { id: targetUserId, deletedAt: null },
-    select: { id: true, status: true, role: true },
-  });
-  if (!target) throw notFound('User');
-
-  if (target.status === input.status) {
-    // Nothing to do; return the current record rather than writing a no-op
-    // audit entry.
-    return getUser(targetUserId);
-  }
-
   const deactivating = input.status !== UserStatus.ACTIVE;
-
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await paymentTransaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(721501)::text`;
+    if(!await tx.user.count({where:{id:actorUserId,role:'SUPER_ADMIN',status:'ACTIVE',deletedAt:null}})) throw forbidden('Administrator access is no longer active');
+    const target=await tx.user.findFirst({where:{id:targetUserId,deletedAt:null},select:{id:true,status:true,role:true}});
+    if(!target) throw notFound('User');
+    if(context.expectedStatus&&target.status!==context.expectedStatus) throw conflict('Account changed. Refresh before updating.');
+    if(target.status===input.status) return tx.user.findUniqueOrThrow({where:{id:targetUserId},select:publicUserSelect});
+    if(deactivating&&target.role==='SUPER_ADMIN'&&await tx.user.count({where:{role:'SUPER_ADMIN',status:'ACTIVE',deletedAt:null,id:{not:targetUserId}}})===0) throw badRequest('Keep at least one active super admin');
     const row = await tx.user.update({
       where: { id: targetUserId },
       data: { status: input.status },
@@ -122,7 +117,7 @@ export async function updateUserStatus(
   });
 
   logger.info(
-    { actorUserId, targetUserId, from: target.status, to: input.status },
+    { actorUserId, targetUserId, to: input.status },
     'User status changed'
   );
 

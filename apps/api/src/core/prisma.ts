@@ -27,7 +27,7 @@ prisma.$on('warn' as never, (e: Prisma.LogEvent) => logger.warn({ prisma: e }, e
 prisma.$on('error' as never, (e: Prisma.LogEvent) => logger.error({ prisma: e }, e.message));
 if (!isProduction) {
   prisma.$on('query' as never, (e: Prisma.QueryEvent) =>
-    logger.debug({ durationMs: e.duration, params: e.params }, e.query)
+    logger.debug({ durationMs: e.duration }, e.query)
   );
 }
 

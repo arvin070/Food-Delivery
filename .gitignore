@@ -13,3 +13,6 @@ coverage/
 
 # Local dev database cluster (embedded Postgres)
 .pgdata/
+
+test-results/
+playwright-report/

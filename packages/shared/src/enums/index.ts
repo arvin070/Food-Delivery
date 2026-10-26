@@ -43,6 +43,7 @@ export const UserStatus = {
 export type UserStatus = (typeof UserStatus)[keyof typeof UserStatus];
 
 export const InstitutionType = {
+  UNIVERSITY: 'UNIVERSITY',
   SCHOOL: 'SCHOOL',
   COLLEGE: 'COLLEGE',
   CORPORATE: 'CORPORATE',
@@ -165,6 +166,7 @@ export type MealScheduleStatus = (typeof MealScheduleStatus)[keyof typeof MealSc
 
 /** Roll-up status of a whole order. Derived from its items. */
 export const OrderStatus = {
+  PICKED_UP: 'PICKED_UP',
   DRAFT: 'DRAFT',
   PENDING: 'PENDING',
   AWAITING_PAYMENT: 'AWAITING_PAYMENT',
@@ -191,6 +193,7 @@ export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus];
  * and checkpoints.
  */
 export const OrderItemStatus = {
+  PICKED_UP: 'PICKED_UP',
   PENDING: 'PENDING',
   CONFIRMED: 'CONFIRMED',
   PREPARING: 'PREPARING',
@@ -230,6 +233,8 @@ export const DeliveryStopStatus = {
 export type DeliveryStopStatus = (typeof DeliveryStopStatus)[keyof typeof DeliveryStopStatus];
 
 export const DeliveryStatus = {
+  ASSIGNED: 'ASSIGNED',
+  PICKED_UP: 'PICKED_UP',
   PENDING: 'PENDING',
   OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
   AT_CHECKPOINT: 'AT_CHECKPOINT',
@@ -248,6 +253,7 @@ export const PaymentProviderName = {
 export type PaymentProviderName = (typeof PaymentProviderName)[keyof typeof PaymentProviderName];
 
 export const PaymentStatus = {
+  CANCELLED: 'CANCELLED',
   CREATED: 'CREATED',
   PENDING: 'PENDING',
   AUTHORIZED: 'AUTHORIZED',

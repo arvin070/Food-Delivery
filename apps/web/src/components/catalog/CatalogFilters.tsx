@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useTransition } from 'react';
 import {
   ALLERGEN_LABELS,
   Allergen,
@@ -18,17 +18,20 @@ import {
  * shared or reloaded, and the server component re-fetches with the new query.
  */
 export function CatalogFilters({
+  institutions,
   facets,
   dates,
   checkpoints,
   deliverySlots,
 }: {
+  institutions: {id:string;name:string}[];
   facets: CatalogFacets;
   dates: string[];
   checkpoints: { id: string; name: string }[];
   deliverySlots: DeliverySlotOption[];
 }) {
   const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   const pathname = usePathname();
   const params = useSearchParams();
 
@@ -37,9 +40,10 @@ export function CatalogFilters({
       const next = new URLSearchParams(params.toString());
       if (value === null || value === '') next.delete(key);
       else next.set(key, value);
+      if (key === 'institutionId') { next.delete('checkpointId'); next.delete('timeSlotId'); }
       if (key === 'serviceDate' || key === 'checkpointId') next.delete('timeSlotId');
       next.delete('page');
-      router.push(`${pathname}?${next.toString()}`);
+      startTransition(() => router.push(`${pathname}?${next.toString()}`));
     },
     [params, pathname, router]
   );
@@ -54,7 +58,7 @@ export function CatalogFilters({
         : [...current, allergen];
       for (const a of updated) next.append('excludeAllergens', a);
       next.delete('page');
-      router.push(`${pathname}?${next.toString()}`);
+      startTransition(() => router.push(`${pathname}?${next.toString()}`));
     },
     [params, pathname, router]
   );
@@ -74,7 +78,7 @@ export function CatalogFilters({
     'w-full rounded-md border-0 py-2 pl-3 pr-8 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 focus:ring-2 focus:ring-inset focus:ring-brand-600';
 
   return (
-    <div className="space-y-5 rounded-lg border border-slate-200 bg-white p-4">
+    <fieldset disabled={isPending} aria-busy={isPending} className="space-y-5 rounded-lg border border-slate-200 bg-white p-4">
       <div>
         <label htmlFor="f-date" className="block text-sm font-medium text-slate-900">
           Delivery date
@@ -99,6 +103,7 @@ export function CatalogFilters({
         </select>
       </div>
 
+      <div><label htmlFor="f-institution" className="block text-sm font-medium text-slate-900">Institution (optional)</label><select id="f-institution" className={`mt-1.5 ${selectClass}`} value={params.get('institutionId')??''} onChange={e=>setParam('institutionId',e.target.value)}><option value="">All institutions & public checkpoints</option>{institutions.map(i=><option value={i.id} key={i.id}>{i.name}</option>)}</select></div>
       <div>
         <label htmlFor="f-checkpoint" className="block text-sm font-medium text-slate-900">
           Deliver to
@@ -219,7 +224,7 @@ export function CatalogFilters({
           ))}
         </ul>
       </fieldset>
-    </div>
+    </fieldset>
   );
 }
 

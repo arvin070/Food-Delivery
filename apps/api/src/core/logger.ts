@@ -24,6 +24,8 @@ export const logger = pino({
       '*.otp',
       '*.otpHash',
       '*.codeHash',
+      '*.token',
+      '*.destinations',
     ],
     censor: '[redacted]',
   },

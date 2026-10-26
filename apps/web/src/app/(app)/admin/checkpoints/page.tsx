@@ -29,7 +29,7 @@ export default async function AdminCheckpointsPage({
   if (filters.page) params.set('page', filters.page);
   params.set('pageSize', '30');
 
-  const { data: checkpoints, meta } = await apiServer.get<CheckpointListResponse>(
+  const { data: checkpoints, meta } = await apiServer.getWithMeta<CheckpointSummary[], CheckpointListResponse['meta']>(
     `/checkpoints?${params}`
   );
 

@@ -1,3 +1,4 @@
+import { issueCode } from '../delivery/delivery.service';
 import { Router } from 'express';
 import {
   cancelOrderSchema,
@@ -15,16 +16,7 @@ export const orderRouter = Router();
 orderRouter.use(authenticate, authorizeBuyer());
 
 orderRouter.get(
-  '/',
-  validateQuery(listOrdersQuerySchema),
-  asyncHandler(async (req, res) => {
-    const { userId } = requireAuth(req);
-    return paginated(res, await orderService.listOrders(userId, req.query as never));
-  })
-);
-
-orderRouter.get(
-  '/history',
+  ['/', '/history'],
   validateQuery(listOrdersQuerySchema),
   asyncHandler(async (req, res) => {
     const { userId } = requireAuth(req);
@@ -33,17 +25,7 @@ orderRouter.get(
 );
 
 orderRouter.post(
-  '/checkout',
-  validateBody(checkoutSchema),
-  asyncHandler(async (req, res) => {
-    const { userId } = requireAuth(req);
-    const order = await orderService.checkout(userId, req.body.idempotencyKey);
-    return created(res, { order });
-  })
-);
-
-orderRouter.post(
-  '/',
+  ['/checkout', '/'],
   validateBody(checkoutSchema),
   asyncHandler(async (req, res) => {
     const { userId } = requireAuth(req);
@@ -71,3 +53,7 @@ orderRouter.post(
     return ok(res, { order });
   })
 );
+orderRouter.post('/:orderId/items/:orderItemId/delivery-code',asyncHandler(async(req,res)=>{
+ res.setHeader('Cache-Control','no-store');
+ return ok(res,await issueCode(requireAuth(req).userId,req.params['orderId']!,req.params['orderItemId']!));
+}));

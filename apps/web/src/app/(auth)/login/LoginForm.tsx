@@ -1,5 +1,6 @@
 'use client';
 
+import { safeNextPath } from '@/lib/safe-next-path';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { loginSchema, type AuthSession } from '@lunch/shared';
@@ -44,7 +45,7 @@ export function LoginForm({ nextPath }: { nextPath?: string | undefined }) {
       // Server components read the session from the cookie the API just set, so
       // refresh the router cache before navigating.
       router.refresh();
-      router.replace(nextPath && nextPath.startsWith('/') ? nextPath : defaultHome(session));
+      router.replace(safeNextPath(nextPath) ?? defaultHome(session));
     } catch (err) {
       if (err instanceof ApiError) {
         setFieldErrors(

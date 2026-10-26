@@ -2,9 +2,9 @@
   "name": "lunch",
   "private": true,
   "version": "0.1.0",
-  "description": "Lunch — scheduled meal/tiffin delivery platform",
+  "description": "Lunch \u2014 scheduled meal/tiffin delivery platform",
   "engines": {
-    "node": ">=20.9.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "workspaces": [
     "packages/*",
@@ -22,9 +22,20 @@
     "db:studio": "npm run db:studio -w @lunch/api",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:browser": "npm run test:browser:integration && npm run test:browser:security",
+    "test:integration": "npm run test -w @lunch/api -- tests/full-system-integration.test.ts tests/parent-delivery-e2e.test.ts tests/order-state.test.ts tests/corporate.test.ts",
+    "db:verify": "node scripts/check-migrations.mjs",
+    "test:browser:integration": "playwright test -c playwright.config.ts tests/browser/integration.spec.ts",
+    "test:browser:security": "playwright test -c playwright.config.ts tests/browser/security.spec.ts",
+    "db:reconcile-order-status": "node scripts/reconcile-order-statuses.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "embedded-postgres": "^18.4.0-beta.17"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "postcss-selector-parser": "^7.1.6"
   }
 }

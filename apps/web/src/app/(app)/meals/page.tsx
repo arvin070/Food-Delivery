@@ -50,11 +50,13 @@ export default async function MealsPage({
   const user = await requireUser('/meals');
   const params = await searchParams;
   const requestedCheckpointId = typeof params['checkpointId'] === 'string' ? params['checkpointId'] : '';
-  const [{ dates }, { checkpoints }] = await Promise.all([
+  const institutionId = typeof params['institutionId'] === 'string' ? params['institutionId'] : '';
+  const [{ dates }, { checkpoints }, { institutions }] = await Promise.all([
     apiServer.get<{ dates: string[] }>(
       `/catalog/dates${requestedCheckpointId ? `?checkpointId=${requestedCheckpointId}` : ''}`
     ),
-    apiServer.get<{ checkpoints: { id: string; name: string }[] }>('/reference/checkpoints'),
+    apiServer.get<{ checkpoints: { id: string; name: string }[] }>('/reference/checkpoints'+(institutionId?'?institutionId='+encodeURIComponent(institutionId):'')),
+    apiServer.get<{institutions:{id:string;name:string}[]}>('/reference/institutions'),
   ]);
   const checkpointId = checkpoints.some((checkpoint) => checkpoint.id === requestedCheckpointId)
     ? requestedCheckpointId
@@ -102,7 +104,7 @@ export default async function MealsPage({
 
       <div className="grid gap-6 lg:grid-cols-[18rem_1fr]">
         <aside>
-          <CatalogFilters
+          <CatalogFilters institutions={institutions}
             facets={catalog.meta.facets}
             dates={dates}
             checkpoints={checkpoints}

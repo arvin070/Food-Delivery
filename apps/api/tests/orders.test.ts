@@ -152,7 +152,7 @@ describe('customer cart and order lifecycle', () => {
     const order = response.body.data.order;
     orderId = order.id as string;
     expect(order).toMatchObject({
-      status: 'PENDING',
+      status: 'AWAITING_PAYMENT',
       paymentStatus: 'CREATED',
       subtotal: (Number(expectedPrice) * 2).toFixed(2),
     });

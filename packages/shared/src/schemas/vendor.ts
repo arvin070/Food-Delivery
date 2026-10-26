@@ -179,7 +179,7 @@ const gramsSchema = z.coerce.number().min(0).max(1000).nullish();
 export const createMealSchema = z.object({
   name: nameSchema,
   description: z.string().trim().max(1000).nullish(),
-  imageUrl: z.string().url().max(2048).nullish(),
+  imageUrl: z.string().url().max(2048).refine(v => /^https?:\/\//i.test(v), 'Use an HTTP or HTTPS image URL').nullish(),
   basePrice: priceSchema,
   foodType: z.enum(Object.values(FoodType) as [FoodType, ...FoodType[]]).default(FoodType.VEG),
   /** Which parts of the day this dish suits. Checked against the slot on publish. */

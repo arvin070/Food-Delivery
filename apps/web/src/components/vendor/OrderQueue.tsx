@@ -12,7 +12,6 @@ import { EmptyState } from '@/components/ui/States';
 
 /** The next step for each status, so one button does the obvious thing. */
 const NEXT_STATUS: Partial<Record<OrderItemStatus, { to: OrderItemStatus; label: string }>> = {
-  [OrderItemStatus.PENDING]: { to: OrderItemStatus.CONFIRMED, label: 'Confirm' },
   [OrderItemStatus.CONFIRMED]: { to: OrderItemStatus.PREPARING, label: 'Start preparing' },
   [OrderItemStatus.PREPARING]: { to: OrderItemStatus.PACKED, label: 'Mark packed' },
 };
@@ -121,8 +120,7 @@ export function OrderQueue({ items }: { items: VendorOrderItem[] }) {
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-slate-900">{group.checkpoint}</h3>
                 <p className="text-xs text-slate-500">
-                  {group.date} · {group.slot} · {group.items.length}{' '}
-                  {group.items.length === 1 ? 'meal' : 'meals'}
+                  {group.date} · {group.slot} · {group.items.reduce((total, item) => total + item.quantity, 0)} meals
                 </p>
               </div>
               {nextLabel && (

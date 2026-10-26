@@ -2,9 +2,9 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatCurrency, type CartView } from '@lunch/shared';
-import { apiClient } from '@/lib/api.client';
+import { apiClient, ApiError } from '@/lib/api.client';
 import { toFormErrors } from '@/lib/form';
 import { Alert } from '@/components/ui/Alert';
 import { Button } from '@/components/ui/Button';
@@ -16,6 +16,14 @@ export function CartContents({ initialCart }: { initialCart: CartView }) {
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutKey, setCheckoutKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const storageKey = `lunch.checkout.${initialCart.id}`;
+  useEffect(() => {
+    try { setCheckoutKey(sessionStorage.getItem(storageKey)); } catch { /* Storage may be disabled. */ }
+  }, [storageKey]);
+  function rememberCheckout(key: string | null) {
+    setCheckoutKey(key);
+    try { if (key) sessionStorage.setItem(storageKey, key); else sessionStorage.removeItem(storageKey); } catch { /* Keep the in-memory retry key. */ }
+  }
 
   async function updateQuantity(itemId: string, quantity: number) {
     setBusyId(itemId);
@@ -51,19 +59,30 @@ export function CartContents({ initialCart }: { initialCart: CartView }) {
     setError(null);
     try {
       const idempotencyKey = checkoutKey ?? crypto.randomUUID();
-      if (!checkoutKey) setCheckoutKey(idempotencyKey);
+      if (!checkoutKey) rememberCheckout(idempotencyKey);
       const { order } = await apiClient.post<{ order: { id: string } }>('/v1/orders/checkout', {
         idempotencyKey,
       });
+      rememberCheckout(null);
       router.push(`/orders/${order.id}`);
       router.refresh();
     } catch (err) {
       const { formError } = toFormErrors(err);
       setError(formError ?? 'Checkout could not be completed.');
+      if (err instanceof ApiError && [400, 409, 422].includes(err.status)) rememberCheckout(null);
       setCheckingOut(false);
     }
   }
 
+  if (checkoutKey && cart.items.length === 0) {
+    return <section className="space-y-4 rounded-lg border p-6">
+      <h2 className="text-lg font-semibold">Recover your checkout</h2>
+      <p>The previous response was interrupted. Retrieve that order before starting another checkout.</p>
+      {error && <Alert tone="error">{error}</Alert>}
+      <Button loading={checkingOut} onClick={checkout}>Retry checkout</Button>
+      <Link className="block text-brand-700" href="/orders">View order history</Link>
+    </section>;
+  }
   if (cart.items.length === 0) {
     return (
       <div className="border-y border-slate-200 py-14 text-center">
@@ -99,13 +118,13 @@ export function CartContents({ initialCart }: { initialCart: CartView }) {
                 min={1}
                 max={Math.min(100, item.remaining)}
                 value={item.quantity}
-                disabled={busyId === item.id}
+                disabled={busyId !== null || checkingOut || !!checkoutKey}
                 onChange={(event) => {
                   const quantity = Number(event.target.value);
                   if (Number.isInteger(quantity) && quantity >= 1) void updateQuantity(item.id, quantity);
                 }}
               />
-              <Button variant="ghost" size="sm" loading={busyId === item.id} onClick={() => remove(item.id)}>
+              <Button variant="ghost" size="sm" disabled={busyId !== null || checkingOut || !!checkoutKey} loading={busyId === item.id} onClick={() => remove(item.id)}>
                 Remove
               </Button>
             </div>
@@ -126,10 +145,10 @@ export function CartContents({ initialCart }: { initialCart: CartView }) {
           className="mt-5 w-full"
           size="lg"
           loading={checkingOut}
-          disabled={cart.items.some((item) => !item.orderable)}
+          disabled={busyId !== null || (!checkoutKey && cart.items.some((item) => !item.orderable))}
           onClick={checkout}
         >
-          {checkingOut ? 'Placing order…' : 'Checkout'}
+          {checkingOut ? 'Placing order…' : checkoutKey ? 'Retry checkout' : 'Checkout'}
         </Button>
         <p className="mt-2 text-xs text-slate-500">Prices and availability are confirmed again at checkout.</p>
       </aside>

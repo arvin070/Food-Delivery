@@ -22,6 +22,7 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
+  API_TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   API_HOST: z.string().default('0.0.0.0'),
   API_PUBLIC_URL: z.string().url().default('http://localhost:4000'),
@@ -38,13 +39,23 @@ const envSchema = z.object({
   BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
-  DELIVERY_OTP_TTL_MINUTES: z.coerce.number().int().min(1).default(720),
+  DELIVERY_OTP_TTL_MINUTES: z.coerce.number().int().min(1).max(720).default(30),
+  DELIVERY_OTP_SECRET: z.string().min(32).optional(),
   DELIVERY_OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
+
+  TRACKING_WORKER_ENABLED: z.enum(['true','false']).default('true').transform(v=>v==='true'),
+  TRACKING_LATE_GRACE_MINUTES: z.coerce.number().int().min(0).max(60).default(5),
+
+  NOTIFICATION_PROVIDER: z.enum(['disabled','gateway']).default('disabled'),
+  NOTIFICATION_GATEWAY_URL: z.string().url().optional(),
+  NOTIFICATION_GATEWAY_TOKEN: z.string().min(16).optional(),
+  NOTIFICATION_WORKER_ENABLED: z.enum(['true','false']).default('true').transform(v=>v==='true'),
 
   PAYMENT_PROVIDER: z.enum(['mock', 'razorpay']).default('mock'),
   RAZORPAY_KEY_ID: z.string().optional(),
   RAZORPAY_KEY_SECRET: z.string().optional(),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional(),
+  MOCK_PAYMENT_WEBHOOK_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -65,8 +76,27 @@ export const isProduction = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';
 export const isDevelopment = env.NODE_ENV === 'development';
 
-/** Guard against shipping a real deploy with a live payment provider unconfigured. */
-if (isProduction && env.PAYMENT_PROVIDER === 'razorpay' && !env.RAZORPAY_KEY_SECRET) {
-  console.error('\nPAYMENT_PROVIDER=razorpay requires RAZORPAY_KEY_SECRET.\n');
+/** Fail closed: simulation can never settle money in production. */
+if (isProduction && env.PAYMENT_PROVIDER === 'mock') {
+  console.error('Production requires a real payment provider.');
   process.exit(1);
 }
+if (env.PAYMENT_PROVIDER === 'razorpay' &&
+    (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET || !env.RAZORPAY_WEBHOOK_SECRET)) {
+  console.error('Razorpay requires KEY_ID, KEY_SECRET and WEBHOOK_SECRET.');
+  process.exit(1);
+}
+
+if (isProduction && !env.DELIVERY_OTP_SECRET) {
+  console.error('Production requires DELIVERY_OTP_SECRET (at least 32 characters).');
+  process.exit(1);
+}
+
+if (env.NOTIFICATION_PROVIDER === 'gateway' &&
+    (!env.NOTIFICATION_GATEWAY_URL || !env.NOTIFICATION_GATEWAY_TOKEN ||
+     (isProduction && !env.NOTIFICATION_GATEWAY_URL.startsWith('https://')))) {
+  console.error('Notification gateway requires a URL and token; production requires HTTPS.');
+  process.exit(1);
+}
+
+if(isProduction && env.BCRYPT_ROUNDS < 10) { console.error('Production requires BCRYPT_ROUNDS >= 10'); process.exit(1); }

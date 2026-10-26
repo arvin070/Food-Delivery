@@ -48,7 +48,7 @@ export const updateProfileSchema = z
     email: emailSchema.optional(),
     phone: phoneSchema.optional(),
     dateOfBirth: dateOnlySchema.nullish(),
-    avatarUrl: z.string().url().max(2048).nullish(),
+    avatarUrl: z.string().url().max(2048).refine(v => /^https?:\/\//i.test(v), 'Use an HTTP or HTTPS image URL').nullish(),
 
     dietaryPreference: dietaryPreferenceSchema.optional(),
     allergies: z.string().trim().max(500).nullish(),

@@ -1,3 +1,4 @@
+import { SubscribeForm } from '@/components/subscriptions/SubscribeForm';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -144,6 +145,7 @@ export default async function MealDetailPage({
             </Alert>
           )}
 
+          {meal.orderable && checkpointId && <SubscribeForm mealScheduleId={meal.mealScheduleId} checkpointId={checkpointId} children={children} serviceDate={meal.serviceDate} />}
           {meal.orderable && checkpointId ? (
             <AddToCartForm
               mealScheduleId={meal.mealScheduleId}

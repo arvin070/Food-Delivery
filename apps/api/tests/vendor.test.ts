@@ -744,7 +744,8 @@ describe('menu management', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('order queue and status pipeline', () => {
-  /** A fresh PENDING item on the seeded vendor's kitchen. */
+  let queueFixtureIndex = 0;
+  /** Paid fixtures cover today's and tomorrow's kitchen queues. */
   async function freshItem(status: OrderItemStatus = OrderItemStatus.PENDING): Promise<string> {
     const schedule = await prisma.mealSchedule.findFirstOrThrow({
       where: { kitchen: { vendorId: seededVendorId }, status: 'PUBLISHED' },
@@ -758,6 +759,7 @@ describe('order queue and status pipeline', () => {
         subtotal: '100.00',
         totalAmount: '100.00',
         status: 'CONFIRMED',
+        payments: { create: { amount: '100.00', status: 'PAID', paidAt: new Date(), lastVerifiedAt: new Date() } },
       },
     });
     const item = await prisma.orderItem.create({
@@ -768,7 +770,7 @@ describe('order queue and status pipeline', () => {
         kitchenId: schedule.kitchenId,
         checkpointId: checkpointIds[0]!,
         timeSlotId: schedule.timeSlotId,
-        serviceDate: schedule.serviceDate,
+        serviceDate: new Date(new Date().setUTCHours(0, 0, 0, 0) + (queueFixtureIndex++ % 2) * 86400000),
         beneficiaryName: 'Queue Test',
         mealNameSnapshot: schedule.meal.name,
         unitPrice: '100.00',
@@ -933,7 +935,7 @@ describe('dashboard', () => {
         serviceDate: todayDate,
         status: { in: ['PENDING', 'CONFIRMED'] },
       },
-      select: { id: true, lineTotal: true },
+      select: { id: true, lineTotal: true, status: true },
     });
 
     if (item) {
@@ -949,7 +951,7 @@ describe('dashboard', () => {
         .expect(200);
 
       expect(Number(after.body.data.dashboard.revenue.today)).toBeCloseTo(
-        beforeRevenue - Number(item.lineTotal),
+        beforeRevenue - (item.status === 'CONFIRMED' ? Number(item.lineTotal) : 0),
         2
       );
     }

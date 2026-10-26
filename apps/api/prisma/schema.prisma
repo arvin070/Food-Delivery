@@ -60,6 +60,7 @@ enum DietaryPreference {
 }
 
 enum InstitutionType {
+  UNIVERSITY
   SCHOOL
   COLLEGE
   CORPORATE
@@ -136,6 +137,7 @@ enum MealScheduleStatus {
 }
 
 enum OrderStatus {
+  PICKED_UP
   DRAFT
   PENDING
   AWAITING_PAYMENT
@@ -155,6 +157,7 @@ enum OrderStatus {
 }
 
 enum OrderItemStatus {
+  PICKED_UP
   PENDING
   CONFIRMED
   PREPARING
@@ -184,6 +187,8 @@ enum DeliveryStopStatus {
 }
 
 enum DeliveryStatus {
+  ASSIGNED
+  PICKED_UP
   PENDING
   OUT_FOR_DELIVERY
   AT_CHECKPOINT
@@ -200,6 +205,7 @@ enum PaymentProviderName {
 }
 
 enum PaymentStatus {
+  CANCELLED
   CREATED
   PENDING
   AUTHORIZED
@@ -223,6 +229,7 @@ enum SubscriptionStatus {
 }
 
 enum NotificationChannel {
+  WHATSAPP
   IN_APP
   EMAIL
   SMS
@@ -257,17 +264,23 @@ model User {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
+  kitchenAssignments KitchenStaff[]
   profile             UserProfile?
   vendor              Vendor?
   deliveryPartner     DeliveryPartner?
   children            Child[]              @relation("ParentChildren")
   childRecord         Child?               @relation("StudentChild")
+  corporateMemberships CorporateMember[]
   institutionMembers  InstitutionMember[]
+  bulkMealRequests InstitutionBulkRequest[]
   carts               Cart[]
   orders              Order[]
   subscriptions       Subscription[]
   refreshTokens       RefreshToken[]
   otpVerifications    OtpVerification[]
+  complaints Complaint[]
+  notificationPreference NotificationPreference?
+  pushDevices PushDevice[]
   notifications       Notification[]
   auditLogs           AuditLog[]           @relation("AuditActor")
   wallet              Wallet?
@@ -476,6 +489,12 @@ model Address {
 // ─── Institutions (college / school / corporate accounts) ────────────────────
 
 model Institution {
+  corporateAccount CorporateAccount?
+  registrationOpen Boolean @default(true)
+  deliveryNotes String?
+  revision Int @default(0)
+  timeSlots TimeSlot[]
+  bulkRequests InstitutionBulkRequest[]
   id        String          @id @default(cuid())
   name      String
   type      InstitutionType
@@ -571,6 +590,8 @@ model Checkpoint {
 /// Times are minutes from midnight in the city's timezone, which makes
 /// comparison and cutoff maths trivial and timezone-safe.
 model TimeSlot {
+  institutionId String?
+  institution Institution? @relation(fields: [institutionId], references: [id], onDelete: Restrict)
   id         String     @id @default(cuid())
   cityId     String?
   label      String
@@ -678,6 +699,7 @@ model Kitchen {
   zone          Zone?                @relation(fields: [zoneId], references: [id], onDelete: SetNull)
   address       Address?             @relation(fields: [addressId], references: [id], onDelete: SetNull)
   serviceAreas   KitchenServiceArea[]
+  staff KitchenStaff[]
   operatingHours KitchenOperatingHour[]
   meals         Meal[]
   mealSchedules MealSchedule[]
@@ -923,6 +945,8 @@ model CartItem {
 }
 
 model Order {
+  corporateCharge CorporateCharge?
+  complaints Complaint[]
   id          String      @id @default(cuid())
   /// Human-readable, shown to customers and riders. e.g. "LN-24A3F7K2".
   orderNumber String      @unique
@@ -955,6 +979,9 @@ model Order {
   @@index([status, createdAt])
   @@unique([customerId, idempotencyKey])
   @@map("orders")
+  @@index([placedAt])
+  @@index([createdAt])
+
 }
 
 /// One meal, for one beneficiary, on one date, at one checkpoint.
@@ -1008,8 +1035,11 @@ model OrderItem {
   /// What has to land at a checkpoint in a slot — the rider's manifest.
   @@index([checkpointId, serviceDate, timeSlotId, status])
   @@index([orderId])
+  @@unique([subscriptionId, serviceDate])
   @@index([childId, serviceDate])
   @@map("order_items")
+  @@index([serviceDate])
+
 }
 
 // ─── Delivery ────────────────────────────────────────────────────────────────
@@ -1038,10 +1068,35 @@ model DeliveryPartner {
   @@map("delivery_partners")
 }
 
-/// One rider's trip: everything leaving one kitchen for one slot on one date.
+/// One rider's trip from one kitchen on one date. timeSlotId anchors the earliest
+/// delivery slot; items retain their own slots so a trip can contain several.
 /// Stops are explicitly ordered, so route optimisation later just rewrites
 /// `sequence` — no schema change.
+/// Latest consented position only. The session token fences delayed/offline writes.
+model DeliveryRunTracking {
+  deliveryRunId String @id
+  deliveryPartnerId String
+  sessionId String @unique
+  expiresAt DateTime
+  latitude Float?
+  longitude Float?
+  accuracy Float?
+  observedAt DateTime?
+  receivedAt DateTime?
+  etaStopId String?
+  estimatedArrivalAt DateTime?
+  etaReportedAt DateTime?
+  deliveryRun DeliveryRun @relation(fields: [deliveryRunId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+  @@map("delivery_run_tracking")
+}
+
 model DeliveryRun {
+  tracking DeliveryRunTracking?
+  name String?
+  revision Int @default(0)
+  creationKey String? @unique
+  creationHash String?
   id         String            @id @default(cuid())
   kitchenId  String
   timeSlotId String
@@ -1050,6 +1105,7 @@ model DeliveryRun {
   status     DeliveryRunStatus @default(PLANNED)
 
   startedAt   DateTime?
+  departedAt  DateTime?
   completedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -1099,8 +1155,14 @@ model Delivery {
 
   deliveryStopId    String?
   deliveryPartnerId String?
-  status            DeliveryStatus @default(PENDING)
+  status            DeliveryStatus @default(ASSIGNED)
 
+  otpIssuedAt DateTime?
+  pickedUpAt DateTime?
+  outForDeliveryAt DateTime?
+  arrivedAt DateTime?
+  failedAt DateTime?
+  verifiedAt DateTime?
   otpHash     String?
   otpExpiresAt DateTime?
   otpAttempts Int       @default(0)
@@ -1135,7 +1197,7 @@ model Payment {
 
   provider          PaymentProviderName @default(MOCK)
   /// The provider's order/intent handle, created before the customer pays.
-  providerOrderId   String?
+  providerOrderId   String? @unique
   /// The provider's payment handle, known after the customer pays.
   providerPaymentId String?             @unique
   /// Client-generated key that makes "pay" safe to retry.
@@ -1148,6 +1210,11 @@ model Payment {
   /// Verbatim provider response, for reconciliation and dispute handling.
   rawPayload Json?
   failureReason String?
+  refundedAmount Decimal @default(0) @db.Decimal(10, 2)
+  attempts PaymentAttempt[]
+  initializationStartedAt DateTime?
+  lastVerifiedAt DateTime?
+  receipt PaymentReceipt?
 
   paidAt   DateTime?
   createdAt DateTime @default(now())
@@ -1159,6 +1226,8 @@ model Payment {
   @@index([orderId, status])
   @@index([status, createdAt])
   @@map("payments")
+  @@index([paidAt])
+
 }
 
 model Refund {
@@ -1166,6 +1235,7 @@ model Refund {
   paymentId String
 
   providerRefundId String?      @unique
+  idempotencyKey String? @unique
   amount           Decimal      @db.Decimal(10, 2)
   status           RefundStatus @default(PENDING)
   reason           String?
@@ -1179,6 +1249,8 @@ model Refund {
 
   @@index([paymentId, status])
   @@map("refunds")
+  @@index([processedAt])
+
 }
 
 /// Stored value. Present from the start because cancellations refund to wallet
@@ -1240,12 +1312,20 @@ model Subscription {
   daysOfWeek Int[]    @default([])
   quantity   Int      @default(1)
   pricePerMeal Decimal @db.Decimal(10, 2)
+  plan String @default("CUSTOM")
+  idempotencyKey String?
+  billingMode String @default("PER_ORDER")
+  billingProvider String?
+  billingReference String?
+  skips SubscriptionSkip[]
+  events SubscriptionEvent[]
 
   status    SubscriptionStatus @default(ACTIVE)
   pausedFrom DateTime?         @db.Date
   pausedTo   DateTime?         @db.Date
   /// Last service date for which items have been generated — the generator's
-  /// high-water mark, so it is safe to re-run.
+  /// diagnostic high-water mark only. Generation rescans the bounded window;
+  /// uniqueness of subscription + service date provides duplicate protection.
   generatedThrough DateTime?   @db.Date
   cancelledAt      DateTime?
 
@@ -1260,6 +1340,7 @@ model Subscription {
   timeSlot   TimeSlot    @relation(fields: [timeSlotId], references: [id], onDelete: Restrict)
   orderItems OrderItem[]
 
+  @@unique([userId, idempotencyKey])
   @@index([userId, status])
   @@index([status, generatedThrough])
   @@map("subscriptions")
@@ -1267,7 +1348,49 @@ model Subscription {
 
 // ─── Notifications & audit ───────────────────────────────────────────────────
 
+enum NotificationDeliveryStatus {
+  QUEUED
+  PROCESSING
+  SENT
+  SKIPPED
+  FAILED
+}
+
+model NotificationPreference {
+  userId String @id
+  inApp Boolean @default(true)
+  email Boolean @default(false)
+  sms Boolean @default(false)
+  whatsapp Boolean @default(false)
+  push Boolean @default(false)
+  disabledEvents String[] @default([])
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("notification_preferences")
+}
+
+model PushDevice {
+  id String @id @default(cuid())
+  userId String
+  token String
+  tokenHash String @unique
+  platform String
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+  @@map("push_devices")
+}
+
 model Notification {
+  eventKey String?
+  templateVersion Int @default(1)
+  status NotificationDeliveryStatus @default(SENT)
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseUntil DateTime?
+  leaseToken String?
+  providerMessageId String?
+  lastError String?
   id     String @id @default(cuid())
   userId String
 
@@ -1286,6 +1409,9 @@ model Notification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt(sort: Desc)])
+  @@unique([userId, eventKey, channel])
+  @@index([status, nextAttemptAt])
+  @@index([status, leaseUntil])
   @@map("notifications")
 }
 
@@ -1309,4 +1435,269 @@ model AuditLog {
   @@index([entityType, entityId, createdAt(sort: Desc)])
   @@index([actorUserId, createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model SubscriptionSkip {
+  id String @id @default(cuid())
+  subscriptionId String
+  serviceDate DateTime @db.Date
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  @@unique([subscriptionId, serviceDate])
+  @@map("subscription_skips")
+}
+
+model SubscriptionEvent {
+  id String @id @default(cuid())
+  subscriptionId String
+  action String
+  serviceDate DateTime? @db.Date
+  createdAt DateTime @default(now())
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  @@index([subscriptionId, createdAt])
+  @@map("subscription_events")
+}
+
+/// Global or city-specific closures. Manage before generating the affected dates.
+model ServiceHoliday {
+  id String @id @default(cuid())
+  serviceDate DateTime @db.Date
+  cityId String?
+  name String
+  @@index([serviceDate, cityId])
+  @@map("service_holidays")
+}
+
+
+/// Only a digest of the signed payload is retained; never the raw webhook body.
+model PaymentWebhook {
+  id String @id @default(cuid())
+  provider PaymentProviderName
+  digest String
+  processedAt DateTime @default(now())
+  @@unique([provider, digest])
+  @@map("payment_webhooks")
+}
+
+model PaymentReceipt {
+  id String @id @default(cuid())
+  paymentId String @unique
+  number String @unique
+  snapshot Json
+  issuedAt DateTime @default(now())
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  @@map("payment_receipts")
+}
+
+/// Durable fake provider ledger. Only reachable in development/test mode.
+model MockProviderPayment {
+  id String @id
+  amount Int
+  currency String
+  status String @default("created")
+  @@map("mock_provider_payments")
+}
+model MockProviderRefund {
+  id String @id
+  paymentId String
+  amount Int
+  status String @default("processed")
+  @@map("mock_provider_refunds")
+}
+
+model PaymentAttempt {
+  id String @id @default(cuid())
+  paymentId String
+  providerPaymentId String @unique
+  status PaymentStatus
+  method String
+  observedAt DateTime @default(now())
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  @@index([paymentId, observedAt])
+  @@map("payment_attempts")
+}
+
+
+/// Kitchen operators use the existing VENDOR role but need no vendor ownership.
+/// Every read and write resolves this assignment from the database.
+model KitchenStaff {
+  id String @id @default(cuid())
+  userId String
+  kitchenId String
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kitchen Kitchen @relation(fields: [kitchenId], references: [id], onDelete: Cascade)
+  @@unique([userId, kitchenId])
+  @@index([kitchenId])
+  @@map("kitchen_staff")
+}
+
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  REJECTED
+}
+
+model Complaint {
+  id String @id @default(cuid())
+  userId String
+  orderId String?
+  subject String
+  message String
+  status ComplaintStatus @default(OPEN)
+  response String?
+  revision Int @default(0)
+  idempotencyKey String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  resolvedAt DateTime?
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  @@unique([userId, idempotencyKey])
+  @@index([status, createdAt])
+  @@map("complaints")
+}
+
+
+/// Non-binding demand requests. A future versioned agreement can reference this
+/// request and own negotiated prices/billing terms without changing retail orders.
+model InstitutionBulkRequest {
+  id String @id @default(cuid())
+  institutionId String
+  requesterUserId String
+  idempotencyKey String
+  quantityPerDay Int
+  mealPeriod MealPeriod
+  startDate DateTime @db.Date
+  endDate DateTime? @db.Date
+  notes String?
+  status InstitutionBulkRequestStatus @default(REQUESTED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  requester User @relation(fields: [requesterUserId], references: [id], onDelete: Restrict)
+  @@unique([institutionId, idempotencyKey])
+  @@index([institutionId, createdAt])
+  @@map("institution_bulk_requests")
+}
+
+enum InstitutionBulkRequestStatus {
+  REQUESTED
+  REVIEWING
+  CLOSED
+}
+
+
+enum CorporateAccountStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+}
+enum CorporateMemberRole {
+  ADMIN
+  EMPLOYEE
+}
+enum CorporateChargeStatus {
+  AUTHORIZED
+  RELEASED
+  INVOICED
+  SETTLED
+}
+model CorporateAccount {
+  id String @id @default(cuid())
+  institutionId String @unique
+  billingEmail String
+  status CorporateAccountStatus @default(PENDING)
+  currency String @default("INR")
+  creditLimit Decimal @default(0) @db.Decimal(12,2)
+  monthlyBudget Decimal @default(0) @db.Decimal(12,2)
+  employeeMonthlyCredit Decimal @default(0) @db.Decimal(12,2)
+  subsidyPerMeal Decimal @default(0) @db.Decimal(10,2)
+  maxMealsPerDay Int @default(1)
+  allowedWeekdays Int[] @default([1,2,3,4,5])
+  allowedPeriods MealPeriod[] @default([LUNCH])
+  allowCopayment Boolean @default(true)
+  revision Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  institution Institution @relation(fields:[institutionId],references:[id],onDelete:Restrict)
+  members CorporateMember[]
+  charges CorporateCharge[]
+  batches CorporateOrderBatch[]
+  invoices CorporateInvoice[]
+  @@map("corporate_accounts")
+}
+model CorporateMember {
+  id String @id @default(cuid())
+  companyId String
+  userId String
+  role CorporateMemberRole @default(EMPLOYEE)
+  employeeNumber String?
+  monthlyCredit Decimal? @db.Decimal(12,2)
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company CorporateAccount @relation(fields:[companyId],references:[id],onDelete:Cascade)
+  user User @relation(fields:[userId],references:[id],onDelete:Restrict)
+  charges CorporateCharge[]
+  @@unique([companyId,userId])
+  @@index([userId,isActive])
+  @@map("corporate_members")
+}
+model CorporateOrderBatch {
+  id String @id @default(cuid())
+  companyId String
+  actorUserId String
+  idempotencyKey String
+  requestHash String
+  createdAt DateTime @default(now())
+  company CorporateAccount @relation(fields:[companyId],references:[id],onDelete:Restrict)
+  charges CorporateCharge[]
+  @@unique([companyId,idempotencyKey])
+  @@map("corporate_order_batches")
+}
+model CorporateCharge {
+  id String @id @default(cuid())
+  companyId String
+  memberId String
+  orderId String @unique
+  batchId String
+  invoiceId String?
+  month String
+  serviceDate DateTime @db.Date
+  quantity Int
+  companyAmount Decimal @db.Decimal(12,2)
+  employeeAmount Decimal @db.Decimal(12,2)
+  status CorporateChargeStatus @default(AUTHORIZED)
+  policySnapshot Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  company CorporateAccount @relation(fields:[companyId],references:[id],onDelete:Restrict)
+  member CorporateMember @relation(fields:[memberId],references:[id],onDelete:Restrict)
+  order Order @relation(fields:[orderId],references:[id],onDelete:Cascade)
+  batch CorporateOrderBatch @relation(fields:[batchId],references:[id],onDelete:Restrict)
+  invoice CorporateInvoice? @relation(fields:[invoiceId],references:[id],onDelete:Restrict)
+  @@index([companyId,month,status])
+  @@index([memberId,serviceDate,status])
+  @@map("corporate_charges")
+}
+model CorporateInvoice {
+  id String @id @default(cuid())
+  companyId String
+  month String
+  number String @unique
+  amount Decimal @db.Decimal(12,2)
+  currency String
+  snapshot Json
+  issuedAt DateTime @default(now())
+  settledAt DateTime?
+  settlementReference String? @unique
+  settledByUserId String?
+  company CorporateAccount @relation(fields:[companyId],references:[id],onDelete:Restrict)
+  charges CorporateCharge[]
+  @@unique([companyId,month])
+  @@map("corporate_invoices")
+  @@index([settledAt])
+
 }

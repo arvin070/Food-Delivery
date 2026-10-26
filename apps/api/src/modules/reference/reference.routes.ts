@@ -38,7 +38,7 @@ referenceRouter.get(
     const { cityId } = req.query as { cityId?: string };
     const institutions = await prisma.institution.findMany({
       where: { isActive: true, ...(cityId ? { cityId } : {}) },
-      select: { id: true, name: true, type: true, cityId: true },
+      select: { id: true, name: true, type: true, cityId: true, registrationOpen:true, deliveryNotes:true },
       orderBy: { name: 'asc' },
     });
     return ok(res, { institutions });
@@ -57,6 +57,7 @@ referenceRouter.get(
     const checkpoints = await prisma.checkpoint.findMany({
       where: {
         isActive: true,
+        OR: [{ institutionId: null }, { institution: { isActive: true } }],
         ...(cityId ? { cityId } : {}),
         ...(institutionId ? { institutionId } : {}),
       },
@@ -88,11 +89,11 @@ referenceRouter.get(
 
 referenceRouter.get(
   '/time-slots',
-  validateQuery(cityFilterSchema),
+  validateQuery(checkpointFilterSchema),
   asyncHandler(async (req, res) => {
-    const { cityId } = req.query as { cityId?: string };
+    const { cityId, institutionId } = req.query as { cityId?: string; institutionId?:string };
     const timeSlots = await prisma.timeSlot.findMany({
-      where: { isActive: true, ...(cityId ? { cityId } : {}) },
+      where: { isActive: true, AND: [...(cityId?[{OR:[{cityId},{cityId:null}]}]:[]),...(institutionId?[{OR:[{institutionId},{institutionId:null}]}]:[])] },
       select: {
         id: true,
         label: true,

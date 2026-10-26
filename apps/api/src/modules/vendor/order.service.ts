@@ -1,3 +1,6 @@
+import { syncOrderStatuses } from '../orders/order-state';
+import { notifyItemProgress } from '../notifications/notification.service';
+import { assertOrderPaid } from '../orders/payment-policy';
 /**
  * The vendor's order queue.
  *
@@ -172,42 +175,6 @@ function statusTimestamps(status: OrderItemStatus): Prisma.OrderItemUpdateInput 
   }
 }
 
-async function syncOrderStatuses(
-  tx: Prisma.TransactionClient,
-  orderIds: string[]
-): Promise<void> {
-  for (const orderId of new Set(orderIds)) {
-    const items = await tx.orderItem.findMany({
-      where: { orderId },
-      select: { status: true },
-    });
-    const statuses = items.map((item) => item.status as OrderItemStatus);
-    let status: string = 'PENDING';
-    if (statuses.length > 0 && statuses.every((itemStatus) => itemStatus === OrderItemStatus.CANCELLED)) {
-      status = 'CANCELLED';
-    } else if (statuses.some((itemStatus) => itemStatus === OrderItemStatus.FAILED)) {
-      status = 'FAILED';
-    } else if (statuses.length > 0 && statuses.every((itemStatus) => itemStatus === OrderItemStatus.DELIVERED)) {
-      status = 'DELIVERED';
-    } else if (statuses.includes(OrderItemStatus.AT_CHECKPOINT)) {
-      status = 'AT_CHECKPOINT';
-    } else if (statuses.includes(OrderItemStatus.OUT_FOR_DELIVERY)) {
-      status = 'OUT_FOR_DELIVERY';
-    } else if (statuses.includes(OrderItemStatus.ASSIGNED) || statuses.includes(OrderItemStatus.DISPATCHED)) {
-      status = 'ASSIGNED';
-    } else if (statuses.includes(OrderItemStatus.PACKED)) {
-      status = 'PACKED';
-    } else if (statuses.includes(OrderItemStatus.PREPARING)) {
-      status = 'PREPARING';
-    } else if (statuses.includes(OrderItemStatus.CONFIRMED)) {
-      status = 'CONFIRMED';
-    } else if (statuses.includes(OrderItemStatus.CANCELLED)) {
-      status = 'PARTIALLY_FULFILLED';
-    }
-    await tx.order.update({ where: { id: orderId }, data: { status: status as never } });
-  }
-}
-
 export async function updateOrderItemStatus(
   vendorId: string,
   orderItemId: string,
@@ -223,6 +190,10 @@ export async function updateOrderItemStatus(
   assertTransitionAllowed(existing.status as OrderItemStatus, input.status);
 
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${existing.orderId} FOR UPDATE`;
+    const current = await tx.orderItem.findUniqueOrThrow({ where: { id: orderItemId } });
+    assertTransitionAllowed(current.status as OrderItemStatus, input.status);
+    if (input.status !== OrderItemStatus.CANCELLED) await assertOrderPaid(tx, existing.orderId);
     await tx.orderItem.update({
       where: { id: orderItemId },
       data: {
@@ -238,6 +209,7 @@ export async function updateOrderItemStatus(
       });
     }
     await syncOrderStatuses(tx, [existing.orderId]);
+    await notifyItemProgress(tx,[orderItemId]);
   });
 
   logger.info(
@@ -292,18 +264,13 @@ export async function bulkUpdateOrderItemStatus(
     }
   }
 
-  if (movable.length > 0) {
-    await prisma.$transaction(async (tx) => {
-      await tx.orderItem.updateMany({
-        where: { id: { in: movable }, ...vendorScope(vendorId) },
-        data: { status: input.status, ...statusTimestamps(input.status) },
-      });
-      await syncOrderStatuses(
-        tx,
-        rows.filter((row) => movable.includes(row.id)).map((row) => row.orderId)
-      );
-    });
-    result.updated = movable;
+  for (const id of movable) {
+    try {
+      await updateOrderItemStatus(vendorId, id, { status: input.status });
+      result.updated.push(id);
+    } catch (error) {
+      result.skipped.push({ orderItemId: id, reason: error instanceof Error ? error.message : 'Cannot be changed' });
+    }
   }
 
   logger.info(

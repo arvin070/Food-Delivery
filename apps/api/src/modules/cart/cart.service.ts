@@ -1,3 +1,4 @@
+import { cityToday, slotInstant } from '../subscriptions/recurrence';
 import type { Prisma } from '@prisma/client';
 import {
   MealScheduleStatus,
@@ -34,6 +35,7 @@ const cartSelect = {
             select: {
               id: true,
               name: true,
+              city: { select: { timezone: true } },
               isActive: true,
               deletedAt: true,
               vendor: { select: { status: true, isActive: true, deletedAt: true } },
@@ -49,16 +51,8 @@ const cartSelect = {
 
 type CartRow = Prisma.CartGetPayload<{ select: typeof cartSelect }>;
 
-function utcToday(): Date {
-  const date = new Date();
-  date.setUTCHours(0, 0, 0, 0);
-  return date;
-}
-
-function isBeforeCutoff(date: Date, startMinute: number, cutoffMinutes: number): boolean {
-  const slotStart = new Date(date);
-  slotStart.setUTCMinutes(slotStart.getUTCMinutes() + startMinute);
-  return Date.now() < slotStart.getTime() - cutoffMinutes * 60_000;
+function isBeforeCutoff(date: Date, startMinute: number, cutoffMinutes: number, timezone: string): boolean {
+  return Date.now() < slotInstant(date, startMinute, timezone).getTime() - cutoffMinutes * 60_000;
 }
 
 function toCartItem(item: CartRow['items'][number]): CartItemView {
@@ -76,8 +70,8 @@ function toCartItem(item: CartRow['items'][number]): CartItemView {
     schedule.kitchen.vendor.status === VendorStatus.APPROVED &&
     schedule.kitchen.vendor.isActive &&
     schedule.kitchen.vendor.deletedAt === null &&
-    date >= utcToday() &&
-    isBeforeCutoff(date, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes) &&
+    date >= cityToday(schedule.kitchen.city.timezone) &&
+    isBeforeCutoff(date, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes, schedule.kitchen.city.timezone) &&
     remaining >= item.quantity &&
     (!item.child || (item.child.isActive && item.child.deletedAt === null));
   const unitPrice = toMoney(schedule.price);
@@ -156,7 +150,7 @@ async function validateAdd(
       reservedQuantity: true,
       timeSlotId: true,
       timeSlot: { select: { startMinute: true, orderCutoffMinutes: true } },
-      kitchen: { select: { id: true } },
+      kitchen: { select: { id: true, city: { select: { timezone: true } } } },
     },
   });
   if (!schedule) throw badRequest('This meal is no longer available', { mealScheduleId: ['Choose an available meal'] });
@@ -185,10 +179,10 @@ async function validateAdd(
   if (!window) throw badRequest('This time is not available at the checkpoint', { checkpointId: ['Choose another checkpoint or time'] });
   if (!serviceArea) throw badRequest('This kitchen does not serve the selected checkpoint', { checkpointId: ['Choose another checkpoint'] });
 
-  if (schedule.serviceDate < utcToday()) {
+  if (schedule.serviceDate < cityToday(schedule.kitchen.city.timezone)) {
     throw badRequest('Delivery date has passed', { mealScheduleId: ['Choose a future delivery'] });
   }
-  if (!isBeforeCutoff(schedule.serviceDate, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes)) {
+  if (!isBeforeCutoff(schedule.serviceDate, schedule.timeSlot.startMinute, schedule.timeSlot.orderCutoffMinutes, schedule.kitchen.city.timezone)) {
     throw badRequest('Ordering cutoff has passed', { mealScheduleId: ['Choose another delivery time'] });
   }
   if (schedule.totalQuantity - schedule.reservedQuantity < input.quantity) {

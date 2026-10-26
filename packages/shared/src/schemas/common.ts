@@ -22,7 +22,8 @@ export const passwordSchema = z
   .max(128, 'Password must be at most 128 characters')
   .regex(/[a-z]/, 'Include at least one lowercase letter')
   .regex(/[A-Z]/, 'Include at least one uppercase letter')
-  .regex(/\d/, 'Include at least one number');
+  .regex(/\d/, 'Include at least one number')
+  .refine(v => new TextEncoder().encode(v).length <= 72, 'Password must fit within 72 UTF-8 bytes');
 
 export const nameSchema = z.string().trim().min(2, 'Too short').max(120, 'Too long');
 

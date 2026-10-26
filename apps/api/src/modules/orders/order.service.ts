@@ -1,3 +1,5 @@
+import { slotInstant, cityToday } from '../subscriptions/recurrence';
+import { releaseCorporateFunding } from '../corporate/funding';
 import { randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import {
@@ -28,6 +30,7 @@ const orderSelect = {
   createdAt: true,
   placedAt: true,
   cancelledAt: true,
+  corporateCharge: { select: { companyAmount:true,employeeAmount:true,status:true } },
   payments: { select: { status: true }, orderBy: { createdAt: 'desc' as const }, take: 1 },
   items: {
     orderBy: { createdAt: 'asc' as const },
@@ -51,36 +54,13 @@ const orderSelect = {
 
 type OrderRow = Prisma.OrderGetPayload<{ select: typeof orderSelect }>;
 
-function statusRollup(row: OrderRow): OrderStatus {
-  if (row.status === OrderStatus.CANCELLED || row.status === OrderStatus.FAILED) {
-    return row.status as OrderStatus;
-  }
-  const statuses = row.items.map((item) => item.status as OrderItemStatus);
-  if (statuses.length > 0 && statuses.every((status) => status === OrderItemStatus.CANCELLED)) {
-    return OrderStatus.CANCELLED;
-  }
-  if (statuses.length > 0 && statuses.every((status) => status === OrderItemStatus.DELIVERED)) {
-    return OrderStatus.DELIVERED;
-  }
-  if (statuses.includes(OrderItemStatus.FAILED)) return OrderStatus.FAILED;
-  if (statuses.includes(OrderItemStatus.AT_CHECKPOINT)) return OrderStatus.AT_CHECKPOINT;
-  if (statuses.includes(OrderItemStatus.OUT_FOR_DELIVERY)) return OrderStatus.OUT_FOR_DELIVERY;
-  if (statuses.includes(OrderItemStatus.ASSIGNED) || statuses.includes(OrderItemStatus.DISPATCHED)) {
-    return OrderStatus.ASSIGNED;
-  }
-  if (statuses.includes(OrderItemStatus.PACKED)) return OrderStatus.PACKED;
-  if (statuses.includes(OrderItemStatus.PREPARING)) return OrderStatus.PREPARING;
-  if (statuses.includes(OrderItemStatus.CONFIRMED)) return OrderStatus.CONFIRMED;
-  if (statuses.includes(OrderItemStatus.CANCELLED)) return OrderStatus.FAILED;
-  return row.status === OrderStatus.PENDING ? OrderStatus.PENDING : OrderStatus.CONFIRMED;
-}
-
 function toCustomerOrder(row: OrderRow): CustomerOrder {
   return {
     id: row.id,
     orderNumber: row.orderNumber,
-    status: statusRollup(row),
+    status: row.status as OrderStatus,
     paymentStatus: (row.payments[0]?.status ?? PaymentStatus.CREATED) as PaymentStatus,
+    ...(row.corporateCharge?{corporateFunding:{companyAmount:toMoney(row.corporateCharge.companyAmount),employeeAmount:toMoney(row.corporateCharge.employeeAmount),status:row.corporateCharge.status}}:{}),
     subtotal: toMoney(row.subtotal),
     totalAmount: toMoney(row.totalAmount),
     currency: row.currency,
@@ -192,6 +172,7 @@ export async function checkout(userId: string, idempotencyKey: string): Promise<
                 id: true,
                 name: true,
                 cityId: true,
+                city: { select: { timezone: true } },
                 capacityPerSlot: true,
               },
             },
@@ -199,18 +180,16 @@ export async function checkout(userId: string, idempotencyKey: string): Promise<
         });
         if (!schedule) throw badRequest('A meal in your cart is no longer available');
 
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0);
+        const today = cityToday(schedule.kitchen.city.timezone);
         if (schedule.serviceDate < today) throw badRequest('A delivery date in your cart has passed');
-        const cutoff = new Date(schedule.serviceDate);
-        cutoff.setUTCMinutes(schedule.timeSlot.startMinute - schedule.timeSlot.orderCutoffMinutes);
+        const cutoff = new Date(slotInstant(schedule.serviceDate, schedule.timeSlot.startMinute, schedule.kitchen.city.timezone).getTime() - schedule.timeSlot.orderCutoffMinutes * 60000);
         if (Date.now() >= cutoff.getTime()) throw conflict('Ordering cutoff has passed for a cart item');
         if (schedule.totalQuantity - schedule.reservedQuantity < cartItem.quantity) {
           throw conflict('Not enough meal stock remains for a cart item');
         }
 
         const [checkpoint, serviceArea, window, child] = await Promise.all([
-          tx.checkpoint.findFirst({ where: { id: cartItem.checkpointId, isActive: true }, select: { id: true, name: true } }),
+          tx.checkpoint.findFirst({ where: { id: cartItem.checkpointId, OR: [{ institutionId: null }, { institution: { isActive: true } }], isActive: true }, select: { id: true, name: true } }),
           tx.kitchenServiceArea.findFirst({ where: { kitchenId: schedule.kitchen.id, checkpointId: cartItem.checkpointId, isActive: true }, select: { id: true } }),
           tx.checkpointTimeSlot.findFirst({ where: { checkpointId: cartItem.checkpointId, timeSlotId: schedule.timeSlotId, isActive: true, timeSlot: { isActive: true } }, select: { id: true } }),
           cartItem.childId
@@ -290,7 +269,7 @@ export async function checkout(userId: string, idempotencyKey: string): Promise<
           customerId: userId,
           idempotencyKey,
           cityId: items[0]?.cityId,
-          status: 'PENDING',
+          status: 'AWAITING_PAYMENT',
           subtotal,
           totalAmount: subtotal,
           placedAt: new Date(),
@@ -367,25 +346,27 @@ export async function listOrders(userId: string, query: ListOrdersQuery): Promis
 export async function cancelOrder(
   userId: string,
   orderId: string,
-  input: CancelOrderInput
+  input: CancelOrderInput,
+  auditContext?: {actorUserId:string;action:string;details:Prisma.InputJsonObject}
 ): Promise<CustomerOrder> {
   const row = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${orderId} FOR UPDATE`;
     const order = await tx.order.findFirst({
       where: { id: orderId, customerId: userId },
-      select: { id: true, status: true, items: { select: { id: true, status: true, mealScheduleId: true, quantity: true, serviceDate: true, timeSlot: { select: { startMinute: true } } } } },
+      select: { id: true, status: true, corporateCharge: { select: {id:true} }, items: { select: { id: true, status: true, mealScheduleId: true, quantity: true, serviceDate: true, timeSlot: { select: { startMinute: true } }, checkpoint: {select:{city:{select:{timezone:true}}}} } } },
     });
     if (!order) throw notFound('Order');
+    if (['CANCELLED','REFUNDED'].includes(order.status)) return tx.order.findUniqueOrThrow({ where: { id: orderId }, select: orderSelect });
     const cancellable = order.items.filter(
       (item) => item.status === OrderItemStatus.PENDING || item.status === OrderItemStatus.CONFIRMED
     );
-    if (cancellable.length !== order.items.length) {
+    if (!cancellable.length || order.items.some(item => !['PENDING', 'CONFIRMED', 'CANCELLED'].includes(item.status))) {
       throw unprocessable(ErrorCode.INVALID_STATE_TRANSITION, 'This order can no longer be cancelled online.');
     }
     const now = new Date();
     for (const item of cancellable) {
-      const cutoff = new Date(item.serviceDate);
-      cutoff.setUTCMinutes(item.timeSlot.startMinute);
-      if (now >= cutoff) throw unprocessable(ErrorCode.INVALID_STATE_TRANSITION, 'An order after its delivery window starts cannot be cancelled online.');
+      const cancellationCutoff = slotInstant(item.serviceDate, item.timeSlot.startMinute, item.checkpoint.city.timezone);
+      if (now >= cancellationCutoff) throw unprocessable(ErrorCode.INVALID_STATE_TRANSITION, 'An order after its delivery window starts cannot be cancelled online.');
     }
     await tx.orderItem.updateMany({ where: { id: { in: cancellable.map((item) => item.id) } }, data: { status: 'CANCELLED', cancelledAt: now } });
     for (const item of cancellable) {
@@ -396,7 +377,9 @@ export async function cancelOrder(
         });
       }
     }
+    await releaseCorporateFunding(tx, order.id);
     await tx.order.update({ where: { id: order.id }, data: { status: 'CANCELLED', cancelledAt: now, cancellationReason: input.reason ?? null } });
+    if (auditContext) await tx.auditLog.create({data:{actorUserId:auditContext.actorUserId,action:auditContext.action,entityType:'Order',entityId:order.id,before:{status:order.status},after:{status:'CANCELLED',...auditContext.details}}});
     return tx.order.findUniqueOrThrow({ where: { id: order.id }, select: orderSelect });
   });
   return toCustomerOrder(row);
